@@ -484,7 +484,7 @@ else:
     if sort_field not in sort_choices.values(): sort_field='sku'
     sort_direction=st.query_params.get('dir','asc')
     if sort_direction not in ('asc','desc'): sort_direction='asc'
-    st.caption('Spaltenüberschrift anklicken: aufsteigend / absteigend sortieren.')
+    st.caption('Kompaktansicht · Überschrift anklicken zum Sortieren · Aktionen: ✏️ Bearbeiten, 🚫 Ausblenden, 🗑️ Löschen. SKU und Artikelname bleiben beim Scrollen sichtbar.')
     df_display = df_visible.copy()
     numeric_fields = {'odoo_id', 'lbrixx_price', 'brickmo_price', 'shipping', 'total', 'lootstore_price', 'lootstore_total', 'difference'}
     if sort_field == 'loot_difference':
@@ -544,7 +544,7 @@ else:
         c=euro_num(r.lootstore_total)
         loot_diff=fmt(round(a-c,2)) if a is not None and c is not None else '–'
         rows.append('<tr>' +
-            f'<td class="edit"><a href="?edit={row_idx}" target="_self">✏️ Edit</a> <a href="?toggle_hidden={row_idx}" target="_self">{"👁️ Einblenden" if checked_status(r.hidden) else "🚫 Ausblenden"}</a> <a href="?delete={row_idx}" target="_self">{"↩️ Wiederherstellen" if checked_status(r.deleted) else "🗑️ Löschen"}</a></td>' +
+            f'<td class="edit"><div class="action-group"><a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
             f'<td class="photo">{img}</td>' +
             f'<td>{cell(r.sku)}</td>' +
             f'<td>{cell(r.ean)}</td>' +
@@ -562,20 +562,31 @@ else:
             '</tr>')
     table_css = """
     <style>
-    .lbrixx-scroll {overflow:auto; max-height:70vh; width:100%; border:1px solid rgba(128,128,128,.25); border-radius:10px;}
-    .lbrixx-table {width:100%; border-collapse:collapse; font-size:14px; min-width:1450px;}
-    .lbrixx-table th {position:sticky;top:0;z-index:2;text-align:left; font-weight:650; padding:12px 10px; background:rgba(128,128,128,.13); white-space:nowrap;}
-    .lbrixx-table td {padding:10px; border-top:1px solid rgba(128,128,128,.2); vertical-align:middle;}
-    .lbrixx-table tr:hover td:not(.shop-price) {background:rgba(128,128,128,.06);}
-    .lbrixx-table .edit a {display:inline-block; padding:7px 9px; border:1px solid rgba(128,128,128,.45); border-radius:7px; white-space:nowrap; text-decoration:none; color:inherit; font-weight:600;}\n    .lbrixx-table .edit a:hover {background:rgba(128,128,128,.16);}\n    .lbrixx-table .photo img {width:65px; height:65px; object-fit:contain; border-radius:5px;}
-    .lbrixx-table .description {min-width:220px;}
-    .lbrixx-table .checked {font-size:12px; white-space:nowrap;}
-    .lbrixx-table .shop-price {font-weight:700; white-space:nowrap; min-width:115px;}
-    .lbrixx-table .shop-price.available {background:#B7E1A1; color:#173B20;}
-    .lbrixx-table .shop-price.unknown {background:#006CB7; color:#FFFFFF;}
-    .lbrixx-table .shop-price.unavailable {background:#D01012; color:#FFFFFF;}
-    .lbrixx-table .shop-price a {color:inherit; text-decoration:underline; text-underline-offset:3px;}
-    .lbrixx-table .shop-price .timestamp {font-size:11px; font-weight:400; margin-top:5px; opacity:.9;}
+    .lbrixx-scroll {overflow:auto; max-height:76vh; width:100%; border:1px solid rgba(128,128,128,.28); border-radius:8px; isolation:isolate;}
+    .lbrixx-table {width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; line-height:1.3;}
+    .lbrixx-table th {position:sticky; top:0; z-index:5; text-align:left; font-weight:700; padding:9px 8px; background:#283342; color:#fff; white-space:nowrap; border-bottom:1px solid #566272;}
+    .lbrixx-table td {padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.2); vertical-align:middle; background:#141821;}
+    .lbrixx-table tr:nth-child(even) td:not(.shop-price) {background:#1c222d;}
+    .lbrixx-table tr:hover td:not(.shop-price) {background:#313c4d;}
+    .lbrixx-table .edit {min-width:102px; width:102px; position:sticky; left:0; z-index:3;}
+    .lbrixx-table th:nth-child(1) {position:sticky;left:0;z-index:9;min-width:102px;width:102px;}
+    .lbrixx-table th:nth-child(2) {position:sticky;left:102px;z-index:8;min-width:54px;width:54px;}
+    .lbrixx-table td:nth-child(2) {position:sticky;left:102px;z-index:3;min-width:54px;width:54px;}
+    .lbrixx-table th:nth-child(3) {position:sticky;left:156px;z-index:8;min-width:90px;width:90px;}
+    .lbrixx-table td:nth-child(3) {position:sticky;left:156px;z-index:3;min-width:90px;width:90px;font-weight:650;}
+    .lbrixx-table th:nth-child(6) {position:sticky;left:246px;z-index:8;min-width:240px;width:240px;}
+    .lbrixx-table td:nth-child(6) {position:sticky;left:246px;z-index:3;min-width:240px;width:240px;max-width:240px;white-space:normal;}
+    .lbrixx-table .action-group {display:flex;align-items:center;gap:3px;}
+    .lbrixx-table .edit a {display:inline-flex;align-items:center;justify-content:center; width:28px;height:27px; border:1px solid rgba(128,128,128,.5); border-radius:5px; text-decoration:none; color:inherit; font-size:14px;}
+    .lbrixx-table .edit a:hover {background:rgba(128,128,128,.25);}
+    .lbrixx-table .photo img {width:43px;height:43px;object-fit:contain;border-radius:4px;background:white;}
+    .lbrixx-table .shop-price {font-weight:700;white-space:nowrap;min-width:105px;}
+    .lbrixx-table .shop-price.available {background:#B7E1A1;color:#173B20;}
+    .lbrixx-table .shop-price.unknown {background:#006CB7;color:#fff;}
+    .lbrixx-table .shop-price.unavailable {background:#D01012;color:#fff;}
+    .lbrixx-table .shop-price a {color:inherit;text-decoration:underline;text-underline-offset:3px;}
+    .lbrixx-table .shop-price .timestamp {font-size:10px;font-weight:400;margin-top:2px;opacity:.9;}
+    .lbrixx-table th a:hover {text-decoration:underline!important;}
     </style>
     """
     headings=['Aktionen','Foto','SKU','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Lootstore-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Differenz LBrixx − Lootstore']
