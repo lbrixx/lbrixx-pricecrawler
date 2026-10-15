@@ -1,2 +1,2 @@
-streamlit>=1.35,<2
-playwright==1.56.0
+streamlit>=1.39,<2
+playwright==1.58.0
