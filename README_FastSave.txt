@@ -1,0 +1,1 @@
+V28 Schnell-Speichern: Ausblenden/Einblenden und Löschen/Wiederherstellen aktualisieren nur eine Zeile in public.products. Ersetze app.py und db_store.py. Keine SQL-Migration, keine neuen Secrets. LBrixx-Nr. ist die aus Odoo default_code stammende interne Artikelnummer (odoo_sku), während SKU die Herstellerartikelnummer ist.

@@ -117,6 +117,17 @@ def save(url,df):
                         cur.execute('INSERT INTO public.price_history(offer_id,price,shipping_cost,availability,recorded_at) VALUES(%s,%s,%s,%s,%s)',(offer,price,shipping,av,stamp))
     return load(url)
 
+def set_product_flag(url, product_id, field, enabled):
+    """Single-row update; does not touch offers, images, prices or history."""
+    columns={'hidden':'is_hidden','deleted':'is_deleted'}
+    if field not in columns:
+        raise ValueError('Unbekanntes Statusfeld')
+    with connect(url) as conn, conn.cursor() as cur:
+        cur.execute(f'UPDATE public.products SET {columns[field]}=%s,updated_at=now() WHERE id=%s',
+                    (bool(enabled),int(product_id)))
+        if cur.rowcount != 1:
+            raise ValueError('Produkt nicht gefunden; bitte Ansicht aktualisieren.')
+
 def history(url,pid):
     with connect(url) as conn,conn.cursor(row_factory=dict_row) as cur:
         cur.execute('''SELECT m.name merchant,h.price,h.shipping_cost,h.recorded_at FROM public.price_history h

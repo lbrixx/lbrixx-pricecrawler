@@ -36,6 +36,16 @@ def save(df):
     stored=db_store.save(DB_URL,normalize(df))
     st.session_state.products=normalize(stored)
 
+def set_product_flag(row, field, enabled):
+    product_id=str(row.get('db_id','')).strip()
+    if not product_id.isdigit():
+        raise ValueError('Datenbank-ID fehlt; bitte Ansicht aktualisieren.')
+    db_store.set_product_flag(DB_URL,int(product_id),field,enabled)
+    products=st.session_state.products
+    mask=products['db_id'].astype(str)==product_id
+    products.loc[mask,field]='1' if enabled else ''
+    st.session_state.products=products
+
 def euro_num(x):
     if x is None or str(x).strip()=='': return None
     s=str(x).strip().replace('€','').replace(' ','').replace('\xa0','')
@@ -334,10 +344,8 @@ if toggle_param != '':
         a,b=st.columns(2)
         with a:
             if st.button('Ja, Änderung speichern',type='primary'):
-                changed=df.copy()
-                changed.at[toggle_index,'hidden']='' if current_hidden else '1'
                 try:
-                    save(changed)
+                    set_product_flag(target,'hidden',not current_hidden)
                     st.query_params.clear()
                     st.rerun()
                 except Exception as exc:
@@ -364,10 +372,8 @@ if delete_param != '':
         a,b=st.columns(2)
         with a:
             if st.button('Ja, bestätigen',type='primary',key='confirm_delete'):
-                changed=df.copy()
-                changed.at[delete_index,'deleted']='' if is_deleted else '1'
                 try:
-                    save(changed)
+                    set_product_flag(item,'deleted',not is_deleted)
                     st.query_params.clear(); st.rerun()
                 except Exception as exc: st.error(f'Löschen fehlgeschlagen: {exc}')
         with b:
