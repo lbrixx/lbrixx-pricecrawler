@@ -5,8 +5,8 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title='LBrixx – Brickmo V16', page_icon='🧱')
-st.title('LBrixx Price-Crawler – Brickmo V16')
+st.set_page_config(page_title='LBrixx – Brickmo V17', page_icon='🧱')
+st.title('LBrixx Price-Crawler – Brickmo V17')
 st.caption('Deutschland: 5,49 € Versand je Bestellung, keine Freigrenze. Einzelartikelvergleich.')
 
 PRODUCTS = {
@@ -43,12 +43,31 @@ def extract_product(soup):
 
 
 def stock_status(soup):
-    text = soup.get_text(' ', strip=True).lower()
-    negative = ('artikel steht derzeit nicht zur verfügung', 'derzeit nicht lieferbar', 'momentan nicht lieferbar', 'nicht auf lager', 'ausverkauft')
-    if any(term in text for term in negative):
-        return 'Nicht lieferbar'
-    # No definitive stock status without a reliable, product-specific stock signal.
-    return 'Unbestätigt'
+    """Only interpret stock notices from the main product detail panel."""
+    scopes = soup.select('.product--details, .product-detail, .product--detail')
+    if not scopes:
+        return 'Unbestätigt', 'Kein eindeutiger Hauptproduktbereich gefunden'
+
+    negative = (
+        'artikel steht derzeit nicht zur verfügung',
+        'derzeit nicht lieferbar',
+        'momentan nicht lieferbar',
+        'nicht auf lager',
+        'ausverkauft',
+    )
+    positive = ('sofort versandfertig',)
+    # Prefer the most specific container instead of the entire page.
+    root = min(scopes, key=lambda element: len(element.get_text(' ', strip=True)))
+    text = ' '.join(root.stripped_strings).casefold()
+    has_negative = any(term in text for term in negative)
+    has_positive = any(term in text for term in positive)
+    if has_negative and has_positive:
+        return 'Unbestätigt', 'Widersprüchliche Lagerhinweise im Produktbereich'
+    if has_negative:
+        return 'Nicht lieferbar', 'Negativer Lagerhinweis im Produktbereich'
+    if has_positive:
+        return 'Lieferbar', 'Sofort versandfertig im Produktbereich'
+    return 'Unbestätigt', 'Kein eindeutiger Lagerhinweis im Produktbereich'
 
 if st.button('Brickmo-Preis prüfen', type='primary'):
     parsed = urlparse(url)
@@ -63,7 +82,7 @@ if st.button('Brickmo-Preis prüfen', type='primary'):
             title = soup.select_one('h1') or soup.select_one('title')
             st.subheader(title.get_text(' ', strip=True) if title else 'Produkt')
             price, source = extract_product(soup)
-            status = stock_status(soup)
+            status, stock_reason = stock_status(soup)
             st.write('Verfügbarkeit:', status)
             if price is None:
                 st.warning('Kein eindeutig zuordenbarer Hauptproduktpreis erkannt. Bitte HTML-Struktur prüfen.')
@@ -76,9 +95,11 @@ if st.button('Brickmo-Preis prüfen', type='primary'):
                 st.caption(f'Preisquelle: {source}. Versand je Bestellung, bei einem Artikel vollständig zugerechnet.')
             if status == 'Nicht lieferbar':
                 st.warning('Nicht lieferbar: vom Ranking ausgeschlossen.')
+            elif status == 'Lieferbar':
+                st.success('Lieferbar: Angebot kann im Preisranking berücksichtigt werden.')
             else:
                 st.info('Lieferbarkeit noch nicht sicher bestätigt: vom Ranking vorerst ausgeschlossen.')
             with st.expander('Diagnose'):
-                st.write({'url': response.url, 'status': response.status_code, 'price_selector': source, 'availability': status})
+                st.write({'url': response.url, 'status': response.status_code, 'price_selector': source, 'availability': status, 'availability_reason': stock_reason})
         except (requests.RequestException, ValueError) as exc:
             st.error(f'Abruf fehlgeschlagen: {exc}')
