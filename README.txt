@@ -1,10 +1,14 @@
-LBrixx Brickmo V13
+LBrixx Brickmo V14 – Produktbezogene Preisermittlung
 
-1. In GitHub Repository lbrixx-pricecrawler die Dateien app.py und requirements.txt auf main ersetzen.
-2. Streamlit Community Cloud neu starten bzw. auf Deployment warten.
-3. 'Brickmo-Preis prüfen' klicken.
-4. Versandkosten nur als verifiziert markieren, wenn sie tatsächlich für Deutschland gelten.
+1. ZIP entpacken.
+2. app.py und requirements.txt im GitHub-Repository lbrixx-pricecrawler ersetzen.
+3. Streamlit aktualisieren lassen.
+4. Brickmo-Preis prüfen klicken.
 
-Diese Testversion ersetzt die V12-Diagnoseoberfläche. Vorherige Dateien bei Bedarf sichern.
-Der Parser nutzt konservative HTML-Selektoren und muss bei Änderungen der Shopseite angepasst werden.
-Nicht lieferbare oder hinsichtlich der Lieferbarkeit unbekannte Angebote werden nicht als günstigste kaufbare Angebote eingestuft.
+V14 sucht Preise nur im Hauptprodukt-Container und vermeidet
+Preise von empfohlenen Produkten. Bei widersprüchlichen Preisen
+innerhalb desselben Preisbereichs erfolgt weiterhin keine Übernahme.
+Nicht lieferbare Angebote bleiben vom Preisranking ausgeschlossen.
+Versandkosten werden nur mit bestätigten Angaben berechnet.
+
+Wenn V14 keinen Preis findet, Screenshot der Diagnose senden.

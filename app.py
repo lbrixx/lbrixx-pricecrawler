@@ -7,8 +7,8 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title='LBrixx – Brickmo V13', layout='wide')
-st.title('LBrixx – Brickmo-Preisvergleich V13')
+st.set_page_config(page_title='LBrixx – Brickmo V14', layout='wide')
+st.title('LBrixx – Brickmo-Preisvergleich V14')
 st.caption('Öffentliche Produktseite; keine Umgehung von Zugriffssperren. Ein einzelner Abruf pro Klick.')
 DEFAULT = 'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'
 url = st.text_input('Brickmo-Produktlink', DEFAULT)
@@ -37,27 +37,43 @@ def amount(raw):
 def extract(soup):
     title = soup.select_one('h1') or soup.title
     name = title.get_text(' ', strip=True) if title else 'Unbekannt'
+    # Never collect all page prices: recommendation cards often reuse these classes.
+    detail = next((soup.select_one(sel) for sel in (
+        '.product-detail', '.product--detail', '[itemscope][itemtype*="Product"]',
+        '.product-detail-content', '.product-detail-main'
+    ) if soup.select_one(sel)), None)
+    if detail is None:
+        return name, [], 'Unbekannt', 'Kein Hauptprodukt-Container erkannt'
+
+    # First select a specific main-product price region. Only if absent,
+    # consider product-scoped semantic markup. Never use page-wide price selectors.
+    selectors = ('.product-detail-price', '.product--price',
+                 '.product-detail-price-container [itemprop="price"]',
+                 '[itemprop="offers"] [itemprop="price"]')
     candidates = []
-    # Shopware price element, product-scoped meta tags, and OpenGraph product price.
-    for selector, attr in [('.product-detail-price', None), ('.product--price', None), ('[itemprop="price"]', 'content'), ('meta[property="product:price:amount"]', 'content')]:
-        for tag in soup.select(selector)[:4]:
-            raw = tag.get(attr) if attr and tag.get(attr) else tag.get_text(' ', strip=True)
-            m = re.search(r'\d[\d.,]*\s*€?', str(raw))
+    for selector in selectors:
+        for tag in detail.select(selector):
+            if tag.find_parent(class_=re.compile(r'(recommend|cross.sell|similar|slider|listing|card|accessor)', re.I)):
+                continue
+            raw = tag.get('content') or tag.get('value') or tag.get_text(' ', strip=True)
+            m = re.search(r'\d[\d.,]*', str(raw))
             v = amount(m.group()) if m else None
             if v is not None:
                 candidates.append((selector, v))
-    text = soup.get_text(' ', strip=True)
-    # Fallback is only accepted when the price follows an explicit product availability label.
+        if candidates:
+            break  # A stronger selector takes precedence over weaker selectors.
+
+    text = detail.get_text(' ', strip=True)
     if not candidates:
         m = re.search(r'Artikel steht derzeit nicht zur Verfügung!\s*€\s*([\d.,]+)', text, re.I)
         if m:
             v = amount(m.group(1))
             if v is not None:
-                candidates.append(('Produkttext neben Verfügbarkeit', v))
+                candidates.append(('Preis direkt nach Nichtverfügbar-Hinweis', v))
     unavailable = bool(re.search(r'Artikel steht derzeit nicht zur Verfügung|derzeit nicht lieferbar|aktuell nicht verfügbar|ausverkauft', text, re.I))
     available = bool(re.search(r'\bSofort lieferbar\b|\bAuf Lager\b|\bsofort verfügbar\b', text, re.I))
     availability = 'Nicht lieferbar' if unavailable else ('Lieferbar (Texthinweis)' if available else 'Unbekannt')
-    return name, candidates, availability
+    return name, candidates, availability, 'Hauptprodukt-Container: ' + str(detail.get('class') or detail.name)
 
 if st.button('Brickmo-Preis prüfen', type='primary'):
     parsed = urlparse(url)
@@ -75,9 +91,10 @@ if st.button('Brickmo-Preis prüfen', type='primary'):
                 st.error('Keine HTML-Antwort erhalten.')
             else:
                 soup = BeautifulSoup(response.text, 'html.parser')
-                name, candidates, availability = extract(soup)
+                name, candidates, availability, scope_info = extract(soup)
                 st.subheader(name)
                 st.write('Verfügbarkeit:', availability)
+                st.caption(scope_info)
                 unique = set(v for _, v in candidates)
                 if not candidates:
                     st.warning('Kein eindeutig zuordenbarer Produktpreis gefunden. Parser muss angepasst werden.')
@@ -103,6 +120,7 @@ if st.button('Brickmo-Preis prüfen', type='primary'):
                         st.success('Kaufbares Angebot mit Gesamtpreis: für den Vergleich geeignet (Lieferbarkeit vor Kauf erneut prüfen).')
                 with st.expander('Diagnose'):
                     st.write('Finale URL:', response.url)
+                    st.write('Preisbereich:', scope_info)
                     st.write('Antwortgröße:', len(response.content), 'Bytes')
                     st.write('Gefundene Preiskandidaten:', [(source, euro(value)) for source, value in candidates])
         except requests.RequestException as exc:
