@@ -1,12 +1,11 @@
-# LBrixx Amazon Preisabruf – Test
+# LBrixx Amazon-Diagnose V4
 
-Testet den öffentlichen HTML-Abruf für Amazon.de ASIN B0DYV3XVZ6. Der Preis ist nur ein unbestätigter Seitenpreis; Versand, Verkäufer und Coupons werden nicht erfasst. Bei Sperre oder fehlendem Preis wird eine Fehlermeldung statt eines Schätzwerts angezeigt.
+Testet mit Chromium/Playwright, ob die Amazon-Produktseite auf dem Streamlit-Host sichtbare Preisfelder ausliefert. Keine CAPTCHA-Umgehung, keine erfundenen Preise.
 
-Lokal starten:
+## Installation auf Streamlit Community Cloud
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+1. Die vier Dateien `app.py`, `requirements.txt`, `packages.txt` und `postBuild` in das Stammverzeichnis des GitHub-Repositories hochladen bzw. ersetzen.
+2. Änderungen committen und Streamlit neu deployen (falls nötig: App rebooten oder Cache löschen).
+3. Auf **Browser-Abfrage testen** klicken und die Diagnose teilen.
 
-Für ein kostenloses öffentliches Hosting kann der Ordner in ein GitHub-Repository gelegt und über Streamlit Community Cloud veröffentlicht werden. Die HTML-Abfrage kann von Amazon blockiert werden; für produktiven Einsatz ist ein autorisierter Datenzugang erforderlich.
+Hinweis: Browserinstallation kann auf kostenlosem Hosting wegen Paket- oder Ressourcenbeschränkungen scheitern. Dann ist ein alternativer Hosting- oder Datenzugangsweg erforderlich.
