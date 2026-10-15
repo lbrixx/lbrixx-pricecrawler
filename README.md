@@ -1,11 +1,16 @@
-# LBrixx Amazon-Diagnose V4
+# LBrixx Amazon Diagnose V5
 
-Testet mit Chromium/Playwright, ob die Amazon-Produktseite auf dem Streamlit-Host sichtbare Preisfelder ausliefert. Keine CAPTCHA-Umgehung, keine erfundenen Preise.
+## Streamlit Community Cloud
 
-## Installation auf Streamlit Community Cloud
+1. Upload `app.py`, `requirements.txt`, and `packages.txt` to the repository root.
+2. Open Streamlit Cloud → Manage app → Settings → Secrets.
+3. Add this TOML configuration:
 
-1. Die vier Dateien `app.py`, `requirements.txt`, `packages.txt` und `postBuild` in das Stammverzeichnis des GitHub-Repositories hochladen bzw. ersetzen.
-2. Änderungen committen und Streamlit neu deployen (falls nötig: App rebooten oder Cache löschen).
-3. Auf **Browser-Abfrage testen** klicken und die Diagnose teilen.
+```toml
+[server]
+# No settings required
+```
 
-Hinweis: Browserinstallation kann auf kostenlosem Hosting wegen Paket- oder Ressourcenbeschränkungen scheitern. Dann ist ein alternativer Hosting- oder Datenzugangsweg erforderlich.
+4. IMPORTANT: Browser binaries are not installed by Python package installation alone. On Streamlit Community Cloud, a root-level `postBuild` hook may not be executed reliably. The robust option is to install Chromium from the Streamlit app at runtime on first launch, or use a deployment platform with a Docker build.
+
+V5 uses a browser bootstrap below; consult app.py for its logic.
