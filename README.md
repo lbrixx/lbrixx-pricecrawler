@@ -1,7 +1,10 @@
-# LBrixx Amazon-Diagnose V10
+# LBrixx eBay-Diagnose V11
 
-GitHub: `app.py` und `requirements.txt` im Repository-Hauptverzeichnis ersetzen. Nach Streamlit-Neustart den Button klicken.
+Diese Version testet öffentlich erreichbare eBay-Suchseiten für FUNWHOLE F9060 / 17003. Sie zeigt nur **unverifizierte** Suchtreffer und behauptet keinen bestätigten Bestpreis.
 
-Diese Version installiert Chromium bei Bedarf, lehnt optionale Cookies ab, soweit eine entsprechende Schaltfläche erkannt wird, und zeigt einen Screenshot sowie sichtbare Preisbereiche. Sie garantiert keine Preiserfassung und verwendet keine Zugangsdaten.
+## Deployment
+1. `app.py` und `requirements.txt` im Hauptverzeichnis des GitHub-Repositories ersetzen.
+2. Commit ausführen; Streamlit Community Cloud aktualisiert die App.
+3. Auf „eBay-Suchseiten diagnostizieren“ klicken.
 
-Hinweis: Browserinstallationen in Streamlit Community Cloud können bei Neustarts verloren gehen. Für dauerhaften Betrieb ist eine reproduzierbare Build-Installation vorzuziehen. Beachte die Nutzungsbedingungen des jeweiligen Anbieters.
+Die Anwendung benötigt kein Playwright und keine Browserinstallation. Für langfristige automatische Preisüberwachung sollten wir die eBay Browse API mit einem Entwicklerkonto evaluieren.
