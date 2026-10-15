@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
 DATA_FILE = 'lbrixx_products.csv'
-COLUMNS = ['sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_price','shipping','total','availability','last_checked','error']
+COLUMNS = ['odoo_id','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_price','shipping','total','availability','last_checked','error']
 SEEDS = [
  {'sku':'FO9060','lbrixx_sku':'17003','description':'FunWhole Cyberpunk Future Bus','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'},
  {'sku':'FO9043','lbrixx_sku':'','description':'FunWhole Cyberpunk Polizeiauto','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82178/funwhole-cyberpunk-fo9043-polizeiauto-fo9043'},
@@ -116,7 +116,89 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V20')
+st.title('🧱 LBrixx – Preisvergleich V21')
+# Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
+ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
+ODOO_DB=str(secrets('ODOO_DATABASE',''))
+ODOO_KEY=str(secrets('ODOO_API_KEY',''))
+def odoo_read(limit=5, offset=0):
+    if not all((ODOO_URL, ODOO_DB, ODOO_KEY)):
+        raise ValueError('ODOO_URL, ODOO_DATABASE und ODOO_API_KEY in Streamlit Secrets ergänzen.')
+    if not ODOO_URL.startswith('https://'):
+        raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
+    endpoint=ODOO_URL+'/json/2/product.product/search_read'
+    headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price'],'limit':limit,'offset':offset,'order':'id asc'}
+    response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
+    if not response.ok:
+        raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
+    result=response.json()
+    if isinstance(result,dict) and result.get('error'):
+        raise RuntimeError('Odoo meldet einen API-Fehler. Bitte Zugriffsrechte und Tarif prüfen.')
+    if not isinstance(result,list):
+        raise ValueError('Unerwartete Antwort der Odoo-API.')
+    return result
+
+def odoo_merge(existing, products):
+    result=normalize(existing.copy())
+    added=updated=skipped=0
+    for product in products:
+        oid=str(product.get('id','')).strip()
+        sku=str(product.get('default_code') or '').strip()
+        if not oid:
+            skipped+=1; continue
+        matching=result.index[result.odoo_id.eq(oid)].tolist()
+        if not matching and sku:
+            matching=result.index[(result.sku.str.casefold()==sku.casefold()) & (result.odoo_id.eq(''))].tolist()
+        if len(matching)>1:
+            skipped+=1; continue
+        index=matching[0] if matching else None
+        name=str(product.get('name') or '')
+        price=euro_num(product.get('list_price'))
+        patch={'odoo_id':oid,'description':name,'lbrixx_price':f'{price:.2f}' if price is not None else ''}
+        if sku: patch['sku']=sku
+        if index is None:
+            # New products without competitor links can be enriched later.
+            record={c:'' for c in COLUMNS}; record.update(patch)
+            result=pd.concat([result,pd.DataFrame([record])],ignore_index=True)
+            added+=1
+        else:
+            for key,value in patch.items(): result.at[index,key]=value
+            updated+=1
+    return normalize(result),added,updated,skipped
+
+with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded=False):
+    st.caption('Nur lesender Zugriff auf Odoo. Ein API-Schlüssel allein garantiert beim Standard-Tarif keinen externen API-Zugang.')
+    st.write('Server:', ODOO_URL or 'Nicht konfiguriert')
+    col_test,col_import=st.columns(2)
+    with col_test:
+        test_odoo=st.button('🔍 Odoo-Verbindung testen',use_container_width=True)
+    with col_import:
+        import_odoo=st.button('📥 Odoo-Produkte importieren / aktualisieren',use_container_width=True)
+    if test_odoo:
+        try:
+            sample=odoo_read(limit=5)
+            st.success(f'Verbindung erfolgreich: {len(sample)} Beispielartikel abgerufen.')
+            st.dataframe(pd.DataFrame([{'Odoo-ID':p.get('id'),'SKU':p.get('default_code'),'Artikel':p.get('name'),'Preis (€)':p.get('list_price')} for p in sample]),hide_index=True,use_container_width=True)
+        except Exception as exc:
+            st.error(str(exc))
+    if import_odoo:
+        try:
+            all_products=[]
+            for offset in range(0,10000,100):
+                batch=odoo_read(limit=100,offset=offset)
+                all_products.extend(batch)
+                if len(batch)<100: break
+            else:
+                st.warning('Import auf 10.000 Produkte begrenzt.')
+            merged,added,updated,skipped=odoo_merge(st.session_state.products,all_products)
+            save(merged)
+            st.success(f'Odoo-Synchronisierung gespeichert: {added} neu, {updated} aktualisiert, {skipped} übersprungen. Wettbewerberlinks bleiben erhalten.')
+            st.rerun()
+        except Exception as exc:
+            st.error(f'Odoo-Import fehlgeschlagen: {exc}')
+
+
 st.caption('Brickmo · Einzelartikelvergleich nach Deutschland · Versand 5,49 € je Bestellung · keine Freigrenze')
 if not GH_ENABLED:
     st.warning('Artikel werden derzeit nur lokal in Streamlit gespeichert und können bei Neustart/Neuveröffentlichung verloren gehen. CSV regelmäßig exportieren oder GitHub-Speicherung in Secrets einrichten.')
@@ -188,13 +270,13 @@ if edit_param != '':
             other = df.drop(df.index[edit_index])
             if not cleaned_sku:
                 st.error('Bitte eine Hersteller-SKU eintragen.')
-            elif not valid_url(cleaned_url):
+            elif cleaned_url and not valid_url(cleaned_url):
                 st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse eintragen.')
             elif new_price.strip() and (new_price_value is None or new_price_value < 0):
                 st.error('Der LBrixx-Preis muss eine gültige, nicht negative Zahl sein.')
             elif cleaned_sku in other.sku.str.upper().values:
                 st.error('Diese Hersteller-SKU ist bereits vorhanden.')
-            elif cleaned_url in other.brickmo_url.values:
+            elif cleaned_url and cleaned_url in other.brickmo_url.values:
                 st.error('Dieser Brickmo-Link ist bereits vorhanden.')
             else:
                 updated = df.copy()
@@ -295,8 +377,8 @@ else:
     with st.expander('✏️ Artikel bearbeiten / löschen'):
         edited=st.data_editor(df[['sku','lbrixx_sku','description','lbrixx_price','brickmo_url']].copy(),hide_index=True,num_rows='dynamic',use_container_width=True,key='editor',column_config={'brickmo_url':st.column_config.TextColumn('Brickmo-URL',width='large'),'lbrixx_price':st.column_config.TextColumn('LBrixx-Preis €')})
         if st.button('Änderungen speichern'):
-            if edited.sku.duplicated().any() or edited.brickmo_url.duplicated().any(): st.error('Doppelte SKU oder Produkt-URL gefunden.')
-            elif any(not valid_url(u) for u in edited.brickmo_url): st.error('Ungültiger Brickmo-Link.')
+            if edited.loc[edited.sku.ne(''),'sku'].duplicated().any() or edited.loc[edited.brickmo_url.ne(''),'brickmo_url'].duplicated().any(): st.error('Doppelte SKU oder Produkt-URL gefunden.')
+            elif any(u.strip() and not valid_url(u) for u in edited.brickmo_url): st.error('Ungültiger Brickmo-Link.')
             elif any(x and euro_num(x) is None for x in edited.lbrixx_price): st.error('LBrixx-Preis muss eine Zahl sein.')
             else:
                 rows=[]
@@ -318,7 +400,7 @@ with st.expander('📥 Artikel aus CSV importieren'):
         try:
             incoming=pd.read_csv(file,dtype=str,keep_default_na=False,encoding='utf-8-sig')
             if 'brickmo_url' not in incoming.columns: raise ValueError('Spalte brickmo_url fehlt.')
-            if not all(valid_url(u) for u in incoming.brickmo_url): raise ValueError('Mindestens eine URL ist ungültig.')
+            if not all(not u.strip() or valid_url(u) for u in incoming.brickmo_url): raise ValueError('Mindestens eine URL ist ungültig.')
             incoming=normalize(incoming)
             combined=pd.concat([st.session_state.products,incoming],ignore_index=True).drop_duplicates(subset='brickmo_url',keep='first')
             save(combined); st.success('CSV importiert. Jetzt „Alle Preise aktualisieren“ klicken.'); st.rerun()
