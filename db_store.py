@@ -134,3 +134,23 @@ def history(url,pid):
           JOIN public.offers o ON o.id=h.offer_id JOIN public.merchants m ON m.id=o.merchant_id
           WHERE o.product_id=%s ORDER BY h.recorded_at''',(int(pid),))
         return pd.DataFrame(cur.fetchall())
+
+
+def record_own_price(url,product_id,price):
+    """Record confirmed local LBrixx price edits; never writes to Odoo."""
+    if not str(product_id).isdigit():
+        return
+    amount=number(price)
+    if amount is None:
+        return
+    with connect(url) as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT id FROM public.merchants WHERE lower(name)=lower('LBrixx') LIMIT 1")
+        merchant=cur.fetchone()
+        if not merchant:
+            cur.execute("INSERT INTO public.merchants(name,is_active) VALUES('LBrixx',true) RETURNING id")
+            merchant=cur.fetchone()
+        cur.execute("""INSERT INTO public.offers(product_id,merchant_id,is_active,match_status)
+          VALUES(%s,%s,true,'confirmed') ON CONFLICT(product_id,merchant_id)
+          DO UPDATE SET is_active=true RETURNING id""",(int(product_id),merchant['id']))
+        offer=cur.fetchone()['id']
+        cur.execute("INSERT INTO public.price_history(offer_id,price,shipping_cost,availability) VALUES(%s,%s,0,'available')",(offer,amount))

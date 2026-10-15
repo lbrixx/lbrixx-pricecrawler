@@ -288,7 +288,6 @@ with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
         with a:
             url=st.text_input('Brickmo-Produktlink *',placeholder='https://www.brickmo.com/...')
             sku=st.text_input('Hersteller-SKU (optional, wird sonst aus Link ermittelt)')
-            ownsku=st.text_input('LBrixx-Artikelnummer (optional)')
         with b:
             name=st.text_input('Beschreibung (optional, wird aus Shop übernommen)')
             ownprice=st.text_input('LBrixx-Verkaufspreis in € (optional)',placeholder='49,90')
@@ -306,25 +305,51 @@ with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
                         if key and key in df.sku.values: st.error('Diese Hersteller-SKU ist bereits vorhanden. Bitte bestehenden Eintrag bearbeiten.')
                         else:
                             row={c:'' for c in COLUMNS}; row.update(result)
-                            row.update({'sku':key,'lbrixx_sku':ownsku.strip(),'description':name.strip() or result['description'],'lbrixx_price':str(euro_num(ownprice) or '') if ownprice.strip() else '', 'brickmo_url':url.strip()})
+                            row.update({'sku':key,'description':name.strip() or result['description'],'lbrixx_price':str(euro_num(ownprice) or '') if ownprice.strip() else '', 'brickmo_url':url.strip()})
                             save(pd.concat([df,pd.DataFrame([row])],ignore_index=True)); st.success('Artikel hinzugefügt und gespeichert.'); st.rerun()
                     except Exception as e: st.error(f'Artikel konnte nicht automatisch erfasst werden: {e}')
 
-with st.expander('🔗 Lootstore-Beispiellink F9043 zuordnen'):
-    st.caption('Verknüpft den bereitgestellten Lootstore-Link mit dem vorhandenen Artikel F9043/FO9043. Andere Links bleiben unverändert.')
-    if st.button('Lootstore-Link für F9043 speichern'):
-        current=st.session_state.products.copy()
-        matches=current.index[current.sku.str.upper().isin(['F9043','FO9043'])].tolist()
-        if len(matches)!=1:
-            st.error('Der Artikel F9043/FO9043 wurde nicht eindeutig gefunden. Bitte Link über Edit eintragen.')
+with st.expander('➕ Lootstore-Artikel hinzufügen'):
+    st.caption('Lootstore-Produktlink einem bestehenden Artikel zuordnen oder einen neuen Artikel anlegen. Suchparameter werden entfernt.')
+    with st.form('add_lootstore_item'):
+        loot_url=st.text_input('Lootstore-Produktlink *',placeholder='https://lootstore.de/products/...')
+        loot_sku=st.text_input('Hersteller-SKU *',placeholder='z. B. F9051')
+        loot_name=st.text_input('Produktbezeichnung (nur bei neuen Artikeln)')
+        loot_submit=st.form_submit_button('Lootstore-Artikel hinzufügen',type='primary')
+    if loot_submit:
+        clean_loot=loot_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
+        key=loot_sku.strip().upper()
+        if not valid_lootstore_url(clean_loot):
+            st.error('Bitte einen gültigen Lootstore-HTTPS-Produktlink eintragen.')
+        elif not key:
+            st.error('Bitte die Hersteller-SKU zur eindeutigen Zuordnung angeben.')
         else:
-            i=matches[0]
-            current.at[i,'lootstore_url']='https://lootstore.de/products/funwhole-lumibricks-f9043-cyberpunk-police-patrol-car'
-            for f in ('lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error'):
-                current.at[i,f]=''
             try:
-                save(current); st.success('Lootstore-Link gespeichert. Nun den Artikel aktualisieren.'); st.rerun()
-            except Exception as exc: st.error(str(exc))
+                current=st.session_state.products.copy()
+                matches=current.index[current.sku.astype(str).str.upper().eq(key)].tolist()
+                if len(matches)>1:
+                    st.error('Mehrere Artikel mit dieser SKU gefunden. Bitte über die Artikelbearbeitung zuordnen.')
+                elif clean_loot in current.lootstore_url.astype(str).str.split('?',n=1).str[0].str.rstrip('/').values:
+                    st.error('Dieser Lootstore-Link ist bereits einem Artikel zugeordnet.')
+                else:
+                    with st.spinner('Lootstore-Preis wird abgefragt…'):
+                        result=parse_lootstore(clean_loot)
+                    if matches:
+                        idx=matches[0]
+                        current.at[idx,'lootstore_url']=clean_loot
+                        for field,value in result.items():
+                            if field.startswith('lootstore_') and field in current.columns and field!='lootstore_url':
+                                current.at[idx,field]=value
+                    else:
+                        row={c:'' for c in COLUMNS}
+                        row.update({'sku':key,'description':loot_name.strip() or key,'lootstore_url':clean_loot})
+                        row.update({k:v for k,v in result.items() if k.startswith('lootstore_') and k!='lootstore_url'})
+                        current=pd.concat([current,pd.DataFrame([row])],ignore_index=True)
+                    save(current)
+                    st.success('Lootstore-Artikel gespeichert.')
+                    st.rerun()
+            except Exception as exc:
+                st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
 st.subheader('Artikelübersicht')
 df=st.session_state.products.copy()
@@ -400,7 +425,6 @@ if edit_param != '':
             e1, e2 = st.columns(2)
             with e1:
                 new_sku = st.text_input('Hersteller-SKU', value=str(current['sku']))
-                new_ownsku = st.text_input('LBrixx-Artikelnummer', value=str(current['lbrixx_sku']))
                 new_ean = st.text_input('EAN / Barcode', value=str(current['ean']))
                 new_url = st.text_input('Brickmo-Produktlink', value=str(current['brickmo_url']))
                 new_loot_url = st.text_input('Lootstore-Produktlink', value=str(current['lootstore_url']))
@@ -414,20 +438,21 @@ if edit_param != '':
             st.rerun()
         if confirm:
             cleaned_sku = new_sku.strip().upper()
-            cleaned_url = new_url.strip()
+            cleaned_url = new_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
+            cleaned_loot_url = new_loot_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
             new_price_value = euro_num(new_price)
             other = df.drop(df.index[edit_index])
             if not cleaned_sku:
                 st.error('Bitte eine Hersteller-SKU eintragen.')
             elif cleaned_url and not valid_url(cleaned_url):
                 st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse eintragen.')
-            elif new_loot_url.strip() and not valid_lootstore_url(new_loot_url):
+            elif cleaned_loot_url and not valid_lootstore_url(cleaned_loot_url):
                 st.error('Bitte eine gültige Lootstore-HTTPS-Produktadresse eintragen.')
             elif new_price.strip() and (new_price_value is None or new_price_value < 0):
                 st.error('Der LBrixx-Preis muss eine gültige, nicht negative Zahl sein.')
             elif cleaned_sku in other.sku.str.upper().values:
                 st.error('Diese Hersteller-SKU ist bereits vorhanden.')
-            elif new_loot_url.strip() and new_loot_url.strip() in other.lootstore_url.values:
+            elif cleaned_loot_url and cleaned_loot_url in other.lootstore_url.values:
                 st.error('Dieser Lootstore-Link ist bereits vorhanden.')
             elif cleaned_url and cleaned_url in other.brickmo_url.values:
                 st.error('Dieser Brickmo-Link ist bereits vorhanden.')
@@ -436,12 +461,11 @@ if edit_param != '':
                 updated.at[edit_index, 'hidden'] = '1' if new_hidden else ''
                 updated.at[edit_index, 'ean'] = new_ean.strip()
                 updated.at[edit_index, 'sku'] = cleaned_sku
-                updated.at[edit_index, 'lbrixx_sku'] = new_ownsku.strip()
                 updated.at[edit_index, 'description'] = new_desc.strip()
                 updated.at[edit_index, 'lbrixx_price'] = f'{new_price_value:.2f}' if new_price.strip() else ''
                 updated.at[edit_index, 'brickmo_url'] = cleaned_url
-                updated.at[edit_index, 'lootstore_url'] = new_loot_url.strip()
-                if new_loot_url.strip() != str(current['lootstore_url']):
+                updated.at[edit_index, 'lootstore_url'] = cleaned_loot_url
+                if cleaned_loot_url != str(current['lootstore_url']):
                     for field in ('lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error'):
                         updated.at[edit_index,field]=''
                 # A changed URL invalidates the old shop price and availability until rechecked.
@@ -450,11 +474,29 @@ if edit_param != '':
                         updated.at[edit_index, field] = ''
                 try:
                     save(updated)
+                    if new_price.strip() and new_price_value != euro_num(current['lbrixx_price']):
+                        db_store.record_own_price(DB_URL, str(current['db_id']), new_price_value)
                     st.query_params.clear()
                     st.success('Artikel dauerhaft gespeichert.')
                     st.rerun()
                 except Exception as exc:
                     st.error(f'Änderungen konnten nicht gespeichert werden: {exc}')
+        st.markdown('##### 📈 Preisverlauf dieses Artikels')
+        own_shipping=st.toggle('Versandkosten einbeziehen',value=False,key=f'edit_shipping_{edit_index}')
+        if str(current.get('db_id','')).strip().isdigit():
+            try:
+                own_history=db_store.history(DB_URL,str(current['db_id']))
+                if own_history.empty:
+                    st.info('Noch keine gespeicherten Preisverläufe für diesen Artikel.')
+                else:
+                    own_history['Wert']=pd.to_numeric(own_history['price'],errors='coerce')
+                    if own_shipping:
+                        own_history['Wert']+=pd.to_numeric(own_history['shipping_cost'],errors='coerce').fillna(0)
+                    own_chart=own_history.pivot_table(index='recorded_at',columns='merchant',values='Wert',aggfunc='last')
+                    st.line_chart(own_chart)
+            except Exception as exc:
+                st.warning(f'Preisverlauf konnte nicht geladen werden: {exc}')
+
 # Hidden state is persisted in the existing GitHub CSV and retained during Odoo merges.
 # Use the original dataframe index so sorting/filtering never changes edit targets.
 show_hidden=st.checkbox('👁️ Ausgeblendete Artikel anzeigen',value=False,key='show_hidden')
@@ -472,7 +514,6 @@ else:
     sort_choices = {'EAN': 'ean',
         'Odoo-ID': 'odoo_id',
         'SKU': 'sku',
-        'LBrixx-Artikelnummer': 'lbrixx_sku',
         'Beschreibung': 'description',
         'LBrixx-Preis': 'lbrixx_price',
         'Brickmo-Preis': 'brickmo_price',
