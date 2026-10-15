@@ -1,7 +1,7 @@
-LBrixx Price-Crawler V22
+LBrixx Price-Crawler V23
 
-NEU: Odoo JSON-2 API mit context.lang = de_DE. Deutsche Produktnamen werden beim Verbindungstest und beim vollständigen Odoo-Import abgefragt. Falls Odoo keine deutsche Übersetzung gespeichert hat, bleibt der Ausgangsname bestehen.
+NEU: Sortierung der Artikelübersicht nach SKU, Odoo-ID, Beschreibung, Preisen, Preisdifferenz, Verfügbarkeit oder letztem Abruf. Auf- und absteigend. Fehlende Werte stehen am Ende.
 
-Bestehende Wettbewerberlinks, Odoo-IDs und GitHub-Speicherung bleiben erhalten. Artikel ohne Brickmo-Link werden bei der Brickmo-Preisaktualisierung übersprungen.
+WICHTIG: Sortierung ändert ausschließlich die Darstellung. Edit-Buttons referenzieren weiterhin die ursprüngliche Zeilenposition. GitHub-Daten, Odoo-Zuordnung und Wettbewerberlinks bleiben unverändert.
 
-INSTALLATION: Vorher CSV-Sicherung exportieren; app.py und requirements.txt auf GitHub ersetzen; Streamlit neu laden; Odoo-Verbindung testen, dann Produkte importieren / aktualisieren. Secrets unverändert.
+INSTALLATION: app.py und requirements.txt aus dem ZIP in GitHub ersetzen. Streamlit-Secrets nicht ändern.

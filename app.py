@@ -116,7 +116,7 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V22')
+st.title('🧱 LBrixx – Preisvergleich V23')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -298,6 +298,39 @@ if edit_param != '':
                     st.error(f'Änderungen konnten nicht gespeichert werden: {exc}')
 if df.empty: st.info('Noch keine Artikel vorhanden.')
 else:
+    sort_choices = {
+        'Odoo-ID': 'odoo_id',
+        'SKU': 'sku',
+        'LBrixx-Artikelnummer': 'lbrixx_sku',
+        'Beschreibung': 'description',
+        'LBrixx-Preis': 'lbrixx_price',
+        'Brickmo-Preis': 'brickmo_price',
+        'Versand': 'shipping',
+        'Brickmo-Gesamtpreis': 'total',
+        'Preisdifferenz (LBrixx − Brickmo)': 'difference',
+        'Verfügbarkeit': 'availability',
+        'Letzte Preisprüfung': 'last_checked',
+    }
+    sort_col, direction_col = st.columns([3, 1])
+    with sort_col:
+        sort_label = st.selectbox('Sortieren nach', options=list(sort_choices), index=1)
+    with direction_col:
+        sort_direction = st.selectbox('Reihenfolge', options=['Aufsteigend', 'Absteigend'])
+    sort_field = sort_choices[sort_label]
+    df_display = df.copy()
+    numeric_fields = {'odoo_id', 'lbrixx_price', 'brickmo_price', 'shipping', 'total', 'difference'}
+    if sort_field == 'difference':
+        df_display['_sort'] = df_display.apply(
+            lambda r: (euro_num(r.lbrixx_price) - euro_num(r.total))
+            if euro_num(r.lbrixx_price) is not None and euro_num(r.total) is not None
+            else float('nan'), axis=1)
+    elif sort_field in numeric_fields:
+        df_display['_sort'] = df_display[sort_field].map(euro_num)
+    else:
+        df_display['_sort'] = df_display[sort_field].fillna('').astype(str).str.casefold()
+        df_display.loc[df_display[sort_field].fillna('').astype(str).str.strip().eq(''), '_sort'] = None
+    df_display = df_display.sort_values('_sort', ascending=(sort_direction == 'Aufsteigend'),
+                                        na_position='last', kind='stable')
     # Render clickable, availability-colored Brickmo price cells as safe HTML.
     # st.dataframe does not reliably combine per-cell background styles with LinkColumn.
     def cell(v):
@@ -314,7 +347,7 @@ else:
         return f'<td class="brickmo-price {css_class}" title="{cell(row.availability or "Nicht geprüft")}">{content}</td>'
 
     rows=[]
-    for row_idx, r in df.iterrows():
+    for row_idx, r in df_display.iterrows():
         photo=str(r.photo).strip()
         img=f'<img src="{cell(photo)}" alt="Produktfoto" loading="lazy">' if photo.startswith('https://') else '–'
         a=euro_num(r.lbrixx_price); b=euro_num(r.total)
