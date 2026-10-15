@@ -1,14 +1,15 @@
-import os, re, io, csv, json, base64, hashlib, html
+import os, re, io, csv, json, base64, hashlib, html, time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+import db_store
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
 DATA_FILE = 'lbrixx_products.csv'
-COLUMNS = ['odoo_id','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error']
+COLUMNS = ['db_id','ean','odoo_id','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error']
 SEEDS = [
  {'sku':'FO9060','lbrixx_sku':'17003','description':'FunWhole Cyberpunk Future Bus','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'},
  {'sku':'FO9043','lbrixx_sku':'','description':'FunWhole Cyberpunk Polizeiauto','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82178/funwhole-cyberpunk-fo9043-polizeiauto-fo9043'},
@@ -18,44 +19,13 @@ def secrets(name, default=''):
     try: return st.secrets.get(name, default)
     except Exception: return default
 
-GH_TOKEN=secrets('GITHUB_TOKEN'); GH_REPO=secrets('GITHUB_REPO'); GH_PATH=secrets('GITHUB_DATA_PATH','data/lbrixx_products.csv')
-GH_ENABLED=bool(GH_TOKEN and GH_REPO)
-
-def gh_request(method, payload=None):
-    url=f'https://api.github.com/repos/{GH_REPO}/contents/{GH_PATH}'
-    headers={'Authorization':f'Bearer {GH_TOKEN}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}
-    r=requests.request(method,url,headers=headers,json=payload,timeout=20)
-    if r.status_code not in (200,201,404): r.raise_for_status()
-    return r
+DB_URL=str(secrets('SUPABASE_DB_URL',''))
+if not DB_URL:
+    st.error('SUPABASE_DB_URL fehlt in Streamlit Secrets. Die Datenbank wird nicht verändert.')
+    st.stop()
 
 def load():
-    if GH_ENABLED:
-        r=gh_request('GET')
-        if r.status_code==200:
-            data=r.json()
-            encoded=data.get('content') or ''
-            # GitHub Contents API omits inline content for files over 1 MB.
-            # This can happen after importing many base64 product images from Odoo.
-            if not encoded and data.get('sha'):
-                blob_url=f'https://api.github.com/repos/{GH_REPO}/git/blobs/{data["sha"]}'
-                blob=requests.get(blob_url,headers={
-                    'Authorization':f'Bearer {GH_TOKEN}',
-                    'Accept':'application/vnd.github+json',
-                    'X-GitHub-Api-Version':'2022-11-28'
-                },timeout=60)
-                blob.raise_for_status()
-                blob_data=blob.json()
-                encoded=blob_data.get('content') or ''
-            if not encoded:
-                raise ValueError('Die GitHub-CSV ist leer oder konnte nicht vollständig gelesen werden. Bitte GitHub-Datei und Versionsverlauf prüfen; nichts überschreiben.')
-            content=base64.b64decode(encoded).decode('utf-8-sig')
-            if not content.strip():
-                raise ValueError('Die GitHub-CSV enthält keine Daten. Bitte über GitHub Versionsverlauf wiederherstellen; nichts überschreiben.')
-            return pd.read_csv(io.StringIO(content),dtype=str,keep_default_na=False),data['sha']
-        return pd.DataFrame(SEEDS),None
-    if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE,dtype=str,keep_default_na=False),None
-    return pd.DataFrame(SEEDS),None
+    return db_store.load(DB_URL),None
 
 def normalize(df):
     for c in COLUMNS:
@@ -63,19 +33,8 @@ def normalize(df):
     return df[COLUMNS].fillna('').astype(str).reset_index(drop=True)
 
 def save(df):
-    df=normalize(df)
-    content=df.to_csv(index=False)
-    if len(content.encode('utf-8')) > 25_000_000:
-        raise ValueError('Die Produktdatei ist über 25 MB groß. Speichern abgebrochen, um die GitHub-Daten zu schützen.')
-    if GH_ENABLED:
-        r=gh_request('GET'); sha=r.json().get('sha') if r.status_code==200 else None
-        payload={'message':'Update LBrixx price crawler products','content':base64.b64encode(content.encode('utf-8')).decode('ascii')}
-        if sha: payload['sha']=sha
-        res=gh_request('PUT',payload)
-        if res.status_code not in (200,201): raise RuntimeError(f'GitHub save failed: {res.status_code}')
-    else:
-        with open(DATA_FILE,'w',encoding='utf-8',newline='') as f: f.write(content)
-    st.session_state.products=df
+    stored=db_store.save(DB_URL,normalize(df))
+    st.session_state.products=normalize(stored)
 
 def euro_num(x):
     if x is None or str(x).strip()=='': return None
@@ -130,13 +89,81 @@ def parse_product(url):
     if match: sku=match.group(0).upper()
     return {'sku':sku,'description':title,'brickmo_photo':image,'brickmo_price':f'{price:.2f}','shipping':'5.49','total':f'{price+5.49:.2f}','availability':availability,'last_checked':datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),'error':''}
 
+LOOTSTORE_HOSTS=('lootstore.de','www.lootstore.de')
+
+def valid_lootstore_url(url):
+    p=urlparse(str(url).strip())
+    return p.scheme=='https' and p.hostname in LOOTSTORE_HOSTS and p.path.startswith('/products/')
+
+def parse_lootstore(url):
+    if not valid_lootstore_url(url):
+        raise ValueError('Ungültiger Lootstore-Produktlink.')
+    # Shopify public product JSON, one HTTP request per product.
+    clean=url.split('?',1)[0].rstrip('/')
+    r=requests.get(clean+'.js',headers={'User-Agent':'LBrixxPriceMonitor/1.0 (manual price comparison)','Accept':'application/json'},timeout=25)
+    if r.status_code==429:
+        raise RuntimeError('Lootstore meldet HTTP 429 (zu viele Anfragen). Bitte später erneut versuchen.')
+    r.raise_for_status()
+    product=r.json()
+    variants=product.get('variants') or []
+    if not variants:
+        raise ValueError('Keine Produktvarianten gefunden.')
+    # Prefer the least expensive AVAILABLE variant. If all unavailable, use the lowest priced variant.
+    purchasable=[v for v in variants if v.get('available') is True]
+    candidates=purchasable or variants
+    variant=min(candidates,key=lambda v:float(v.get('price') or 1e15))
+    price=round(float(variant['price'])/100,2)  # Shopify .js price is integer cents
+    availability='Lieferbar' if purchasable else 'Nicht lieferbar'
+    shipping=0.0 if price>=99.0 else 4.99
+    return {'lootstore_price':f'{price:.2f}','lootstore_shipping':f'{shipping:.2f}',
+            'lootstore_total':f'{price+shipping:.2f}', 'lootstore_availability':availability,
+            'lootstore_checked':datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'), 'lootstore_error':''}
+
+def short_date(value):
+    raw=str(value).strip()
+    if not raw: return 'nicht geprüft'
+    try:
+        dt=datetime.strptime(raw,'%Y-%m-%d %H:%M UTC')
+        return dt.strftime('%H:%M %d.%m.%y')
+    except ValueError: return raw[:22]
+
+def checked_status(value):
+    return str(value).strip().lower() in ('1','true','yes','ja')
+
+def update_prices(df,provider,indices):
+    changed=df.copy()
+    total=len(indices)
+    if not total: return changed,0,0
+    progress=st.progress(0)
+    ok=fail=0
+    for pos,i in enumerate(indices):
+        row=changed.loc[i]
+        url=str(row['brickmo_url'] if provider=='brickmo' else row['lootstore_url']).strip()
+        try:
+            data=parse_product(url) if provider=='brickmo' else parse_lootstore(url)
+            for key,value in data.items():
+                if provider=='brickmo' and key in ('sku','description'): continue
+                if provider=='brickmo' and key=='brickmo_photo' and not value: continue
+                changed.at[i,key]=value
+            ok+=1
+        except Exception as exc:
+            field='error' if provider=='brickmo' else 'lootstore_error'
+            changed.at[i,field]=str(exc)
+            fail+=1
+            if '429' in str(exc):
+                st.warning(f'{provider}: HTTP 429. Weitere Anfragen wurden gestoppt.')
+                break
+        progress.progress((pos+1)/total)
+        if pos+1<total: time.sleep(2)
+    return changed,ok,fail
+
 if 'products' not in st.session_state:
     try:
         df,_=load(); st.session_state.products=normalize(df)
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V25')
+st.title('🧱 LBrixx – Preisvergleich V28 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -148,7 +175,7 @@ def odoo_read(limit=5, offset=0):
         raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
     endpoint=ODOO_URL+'/json/2/product.product/search_read'
     headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
-    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','image_128'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','barcode'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
     response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
     if not response.ok:
         raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
@@ -173,9 +200,11 @@ def odoo_merge(existing, products):
         if len(matching)>1:
             skipped+=1; continue
         index=matching[0] if matching else None
+        if index is not None and str(result.at[index,'deleted']).strip()=='1':
+            skipped+=1; continue
         name=str(product.get('name') or '')
         price=euro_num(product.get('list_price'))
-        raw_image=product.get('image_128')
+        raw_image=None # Produktbilder nicht als Base64 in SQL speichern
         # Odoo image_128 is a base64-encoded thumbnail (or False).
         # Keep the old Odoo image if Odoo has no image for this product.
         odoo_photo=''
@@ -187,7 +216,7 @@ def odoo_merge(existing, products):
                     odoo_photo=f'data:{mime};base64,{raw_image}'
             except (ValueError,base64.binascii.Error):
                 pass
-        patch={'odoo_id':oid,'description':name,'lbrixx_price':f'{price:.2f}' if price is not None else ''}
+        patch={'ean':str(product.get('barcode') or '').strip(),'odoo_id':oid,'description':name,'lbrixx_price':f'{price:.2f}' if price is not None else ''}
         if odoo_photo: patch['photo']=odoo_photo
         if sku: patch['sku']=sku
         if index is not None:
@@ -237,9 +266,8 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
             st.error(f'Odoo-Import fehlgeschlagen: {exc}')
 
 
-st.caption('Brickmo · Einzelartikelvergleich nach Deutschland · Versand 5,49 € je Bestellung · keine Freigrenze')
-if not GH_ENABLED:
-    st.warning('Artikel werden derzeit nur lokal in Streamlit gespeichert und können bei Neustart/Neuveröffentlichung verloren gehen. CSV regelmäßig exportieren oder GitHub-Speicherung in Secrets einrichten.')
+st.caption('Brickmo und Lootstore · Einzelartikelvergleich nach Deutschland · Versandkosten je Händler')
+st.success('🗄️ PostgreSQL verbunden – Produktdaten werden in Supabase gespeichert.')
 
 with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
     with st.form('add_item',clear_on_submit=False):
@@ -269,11 +297,82 @@ with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
                             save(pd.concat([df,pd.DataFrame([row])],ignore_index=True)); st.success('Artikel hinzugefügt und gespeichert.'); st.rerun()
                     except Exception as e: st.error(f'Artikel konnte nicht automatisch erfasst werden: {e}')
 
+with st.expander('🔗 Lootstore-Beispiellink F9043 zuordnen'):
+    st.caption('Verknüpft den bereitgestellten Lootstore-Link mit dem vorhandenen Artikel F9043/FO9043. Andere Links bleiben unverändert.')
+    if st.button('Lootstore-Link für F9043 speichern'):
+        current=st.session_state.products.copy()
+        matches=current.index[current.sku.str.upper().isin(['F9043','FO9043'])].tolist()
+        if len(matches)!=1:
+            st.error('Der Artikel F9043/FO9043 wurde nicht eindeutig gefunden. Bitte Link über Edit eintragen.')
+        else:
+            i=matches[0]
+            current.at[i,'lootstore_url']='https://lootstore.de/products/funwhole-lumibricks-f9043-cyberpunk-police-patrol-car'
+            for f in ('lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error'):
+                current.at[i,f]=''
+            try:
+                save(current); st.success('Lootstore-Link gespeichert. Nun den Artikel aktualisieren.'); st.rerun()
+            except Exception as exc: st.error(str(exc))
+
 st.subheader('Artikelübersicht')
 df=st.session_state.products.copy()
 
 # The Edit link in the first table column selects a row by its current position.
 # All edits are committed through save(), including GitHub persistence.
+toggle_param = st.query_params.get('toggle_hidden', '')
+if toggle_param != '':
+    try:
+        toggle_index=int(toggle_param)
+        if toggle_index < 0 or toggle_index >= len(df):
+            raise ValueError('Artikel nicht gefunden.')
+        # Confirmation avoids unintended writes from opening a URL.
+        target=df.iloc[toggle_index]
+        current_hidden=str(target.get('hidden','')).strip().lower() in ('1','true','yes','ja')
+        st.warning(f"Artikel {target['sku'] or target['description']} {'wieder einblenden' if current_hidden else 'ausblenden'}?")
+        a,b=st.columns(2)
+        with a:
+            if st.button('Ja, Änderung speichern',type='primary'):
+                changed=df.copy()
+                changed.at[toggle_index,'hidden']='' if current_hidden else '1'
+                try:
+                    save(changed)
+                    st.query_params.clear()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f'Speichern fehlgeschlagen: {exc}')
+        with b:
+            if st.button('Abbrechen',key='cancel_hide'):
+                st.query_params.clear()
+                st.rerun()
+    except (ValueError,TypeError):
+        st.error('Ungültiger Artikel-Link.')
+        if st.button('Zurück zur Übersicht'):
+            st.query_params.clear()
+            st.rerun()
+
+delete_param=st.query_params.get('delete','')
+if delete_param != '':
+    try:
+        delete_index=int(delete_param)
+        if delete_index<0 or delete_index>=len(df): raise ValueError('Artikel nicht gefunden')
+        item=df.iloc[delete_index]
+        is_deleted=checked_status(item.get('deleted',''))
+        st.warning(f"{'Wiederherstellen' if is_deleted else 'Aus dem Price-Crawler löschen'}: {item['sku'] or item['description']}?")
+        st.caption('Gelöschte Odoo-Artikel werden bei einem erneuten Odoo-Import nicht wieder angelegt. In Odoo selbst wird nichts gelöscht.')
+        a,b=st.columns(2)
+        with a:
+            if st.button('Ja, bestätigen',type='primary',key='confirm_delete'):
+                changed=df.copy()
+                changed.at[delete_index,'deleted']='' if is_deleted else '1'
+                try:
+                    save(changed)
+                    st.query_params.clear(); st.rerun()
+                except Exception as exc: st.error(f'Löschen fehlgeschlagen: {exc}')
+        with b:
+            if st.button('Abbrechen',key='cancel_delete'):
+                st.query_params.clear(); st.rerun()
+    except (ValueError,TypeError):
+        st.error('Ungültiger Löschlink.')
+
 edit_param = st.query_params.get('edit', '')
 if edit_param != '':
     try:
@@ -293,10 +392,13 @@ if edit_param != '':
             with e1:
                 new_sku = st.text_input('Hersteller-SKU', value=str(current['sku']))
                 new_ownsku = st.text_input('LBrixx-Artikelnummer', value=str(current['lbrixx_sku']))
+                new_ean = st.text_input('EAN / Barcode', value=str(current['ean']))
                 new_url = st.text_input('Brickmo-Produktlink', value=str(current['brickmo_url']))
+                new_loot_url = st.text_input('Lootstore-Produktlink', value=str(current['lootstore_url']))
             with e2:
                 new_desc = st.text_input('Beschreibung', value=str(current['description']))
                 new_price = st.text_input('LBrixx-Verkaufspreis (€)', value=fmt(current['lbrixx_price']).replace(' €','') if euro_num(current['lbrixx_price']) is not None else '')
+            new_hidden = st.checkbox('Artikel dauerhaft aus der Übersicht ausblenden', value=str(current.get('hidden','')).strip().lower() in ('1','true','yes','ja'))
             confirm = st.form_submit_button('💾 Änderungen speichern', type='primary')
         if st.button('Abbrechen'):
             st.query_params.clear()
@@ -310,19 +412,29 @@ if edit_param != '':
                 st.error('Bitte eine Hersteller-SKU eintragen.')
             elif cleaned_url and not valid_url(cleaned_url):
                 st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse eintragen.')
+            elif new_loot_url.strip() and not valid_lootstore_url(new_loot_url):
+                st.error('Bitte eine gültige Lootstore-HTTPS-Produktadresse eintragen.')
             elif new_price.strip() and (new_price_value is None or new_price_value < 0):
                 st.error('Der LBrixx-Preis muss eine gültige, nicht negative Zahl sein.')
             elif cleaned_sku in other.sku.str.upper().values:
                 st.error('Diese Hersteller-SKU ist bereits vorhanden.')
+            elif new_loot_url.strip() and new_loot_url.strip() in other.lootstore_url.values:
+                st.error('Dieser Lootstore-Link ist bereits vorhanden.')
             elif cleaned_url and cleaned_url in other.brickmo_url.values:
                 st.error('Dieser Brickmo-Link ist bereits vorhanden.')
             else:
                 updated = df.copy()
+                updated.at[edit_index, 'hidden'] = '1' if new_hidden else ''
+                updated.at[edit_index, 'ean'] = new_ean.strip()
                 updated.at[edit_index, 'sku'] = cleaned_sku
                 updated.at[edit_index, 'lbrixx_sku'] = new_ownsku.strip()
                 updated.at[edit_index, 'description'] = new_desc.strip()
                 updated.at[edit_index, 'lbrixx_price'] = f'{new_price_value:.2f}' if new_price.strip() else ''
                 updated.at[edit_index, 'brickmo_url'] = cleaned_url
+                updated.at[edit_index, 'lootstore_url'] = new_loot_url.strip()
+                if new_loot_url.strip() != str(current['lootstore_url']):
+                    for field in ('lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error'):
+                        updated.at[edit_index,field]=''
                 # A changed URL invalidates the old shop price and availability until rechecked.
                 if cleaned_url != str(current['brickmo_url']):
                     for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'brickmo_photo'):
@@ -334,30 +446,50 @@ if edit_param != '':
                     st.rerun()
                 except Exception as exc:
                     st.error(f'Änderungen konnten nicht gespeichert werden: {exc}')
+# Hidden state is persisted in the existing GitHub CSV and retained during Odoo merges.
+# Use the original dataframe index so sorting/filtering never changes edit targets.
+show_hidden=st.checkbox('👁️ Ausgeblendete Artikel anzeigen',value=False,key='show_hidden')
+show_deleted=st.checkbox('🗑️ Gelöschte Artikel zur Wiederherstellung anzeigen',value=False,key='show_deleted')
+deleted_mask=df['deleted'].map(checked_status)
+hidden_mask=df['hidden'].astype(str).str.strip().str.lower().isin(['1','true','yes','ja'])
+st.caption(f'{int((~hidden_mask & ~deleted_mask).sum())} sichtbare Artikel · {int((hidden_mask & ~deleted_mask).sum())} ausgeblendet · {int(deleted_mask.sum())} gelöscht')
+display_mask=pd.Series(True,index=df.index)
+if not show_hidden: display_mask &= ~hidden_mask
+if not show_deleted: display_mask &= ~deleted_mask
+df_visible=df.loc[display_mask].copy()
+
 if df.empty: st.info('Noch keine Artikel vorhanden.')
 else:
-    sort_choices = {
+    sort_choices = {'EAN': 'ean',
         'Odoo-ID': 'odoo_id',
         'SKU': 'sku',
         'LBrixx-Artikelnummer': 'lbrixx_sku',
         'Beschreibung': 'description',
         'LBrixx-Preis': 'lbrixx_price',
         'Brickmo-Preis': 'brickmo_price',
+        'Lootstore-Preis': 'lootstore_price',
+        'Lootstore-Gesamtpreis': 'lootstore_total',
+        'Preisdifferenz (LBrixx − Lootstore)': 'loot_difference',
         'Versand': 'shipping',
         'Brickmo-Gesamtpreis': 'total',
         'Preisdifferenz (LBrixx − Brickmo)': 'difference',
         'Verfügbarkeit': 'availability',
         'Letzte Preisprüfung': 'last_checked',
     }
-    sort_col, direction_col = st.columns([3, 1])
-    with sort_col:
-        sort_label = st.selectbox('Sortieren nach', options=list(sort_choices), index=1)
-    with direction_col:
-        sort_direction = st.selectbox('Reihenfolge', options=['Aufsteigend', 'Absteigend'])
-    sort_field = sort_choices[sort_label]
-    df_display = df.copy()
-    numeric_fields = {'odoo_id', 'lbrixx_price', 'brickmo_price', 'shipping', 'total', 'difference'}
-    if sort_field == 'difference':
+    # Click a column heading to toggle sort direction.
+    sort_field=st.query_params.get('sort','sku')
+    if sort_field not in sort_choices.values(): sort_field='sku'
+    sort_direction=st.query_params.get('dir','asc')
+    if sort_direction not in ('asc','desc'): sort_direction='asc'
+    st.caption('Spaltenüberschrift anklicken: aufsteigend / absteigend sortieren.')
+    df_display = df_visible.copy()
+    numeric_fields = {'odoo_id', 'lbrixx_price', 'brickmo_price', 'shipping', 'total', 'lootstore_price', 'lootstore_total', 'difference'}
+    if sort_field == 'loot_difference':
+        df_display['_sort'] = df_display.apply(
+            lambda r: (euro_num(r.lbrixx_price) - euro_num(r.lootstore_total))
+            if euro_num(r.lbrixx_price) is not None and euro_num(r.lootstore_total) is not None
+            else float('nan'), axis=1)
+    elif sort_field == 'difference':
         df_display['_sort'] = df_display.apply(
             lambda r: (euro_num(r.lbrixx_price) - euro_num(r.total))
             if euro_num(r.lbrixx_price) is not None and euro_num(r.total) is not None
@@ -367,22 +499,35 @@ else:
     else:
         df_display['_sort'] = df_display[sort_field].fillna('').astype(str).str.casefold()
         df_display.loc[df_display[sort_field].fillna('').astype(str).str.strip().eq(''), '_sort'] = None
-    df_display = df_display.sort_values('_sort', ascending=(sort_direction == 'Aufsteigend'),
+    df_display = df_display.sort_values('_sort', ascending=(sort_direction == 'asc'),
                                         na_position='last', kind='stable')
+    if df_display.empty:
+        st.info('Keine sichtbaren Artikel. Aktiviere „Ausgeblendete Artikel anzeigen“, um Artikel wieder einzublenden.')
     # Render clickable, availability-colored Brickmo price cells as safe HTML.
     # st.dataframe does not reliably combine per-cell background styles with LinkColumn.
     def cell(v):
         return html.escape(str(v if v is not None else ''), quote=True)
 
-    def price_cell(row):
-        status=str(row.availability).strip().lower()
-        css_class = 'available' if status=='lieferbar' else 'unavailable' if status=='nicht lieferbar' else 'unknown'
-        price=fmt(row.brickmo_price)
-        url=str(row.brickmo_url).strip()
-        content=cell(price)
-        if valid_url(url):
-            content=f'<a href="{cell(url)}" target="_blank" rel="noopener noreferrer" title="Brickmo-Produkt öffnen">{content} ↗</a>'
-        return f'<td class="brickmo-price {css_class}" title="{cell(row.availability or "Nicht geprüft")}">{content}</td>'
+    def price_cell(row,provider):
+        if provider=='brickmo':
+            status=str(row.availability).strip().lower()
+            price=fmt(row.brickmo_price)
+            url=str(row.brickmo_url).strip()
+            timestamp=row.last_checked
+            valid=valid_url(url)
+        else:
+            status=str(row.lootstore_availability).strip().lower()
+            price=fmt(row.lootstore_price)
+            url=str(row.lootstore_url).strip()
+            timestamp=row.lootstore_checked
+            valid=valid_lootstore_url(url)
+        css_class='available' if status=='lieferbar' else 'unavailable' if status=='nicht lieferbar' else 'unknown'
+        label=cell(price)
+        if valid: label=f'<a href="{cell(url)}" target="_blank" rel="noopener noreferrer">{label} ↗</a>'
+        err=str(row.error if provider=='brickmo' else row.lootstore_error).strip()
+        stamp=cell(short_date(timestamp))
+        label=('❗ ' if err else '✓ ' if timestamp else '● ')+label
+        return f'<td class="shop-price {css_class}">{label}<div class="timestamp">{stamp}</div></td>'
 
     rows=[]
     for row_idx, r in df_display.iterrows():
@@ -393,83 +538,85 @@ else:
         img=f'<img src="{cell(chosen)}" alt="Produktfoto" loading="lazy">' if chosen.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else '–'
         a=euro_num(r.lbrixx_price); b=euro_num(r.total)
         diff=fmt(round(a-b,2)) if a is not None and b is not None else '–'
+        c=euro_num(r.lootstore_total)
+        loot_diff=fmt(round(a-c,2)) if a is not None and c is not None else '–'
         rows.append('<tr>' +
-            f'<td class="edit"><a href="?edit={row_idx}" target="_self" aria-label="Artikel bearbeiten">✏️ Edit</a></td>' +
+            f'<td class="edit"><a href="?edit={row_idx}" target="_self">✏️ Edit</a> <a href="?toggle_hidden={row_idx}" target="_self">{"👁️ Einblenden" if checked_status(r.hidden) else "🚫 Ausblenden"}</a> <a href="?delete={row_idx}" target="_self">{"↩️ Wiederherstellen" if checked_status(r.deleted) else "🗑️ Löschen"}</a></td>' +
             f'<td class="photo">{img}</td>' +
             f'<td>{cell(r.sku)}</td>' +
+            f'<td>{cell(r.ean)}</td>' +
             f'<td>{cell(r.lbrixx_sku)}</td>' +
             f'<td class="description">{cell(r.description)}</td>' +
             f'<td>{cell(fmt(r.lbrixx_price))}</td>' +
-            price_cell(r) +
+            price_cell(r,'brickmo') +
             f'<td>{cell(fmt(r.shipping))}</td>' +
             f'<td>{cell(fmt(r.total))}</td>' +
+            price_cell(r,'lootstore') +
+            f'<td>{cell(fmt(r.lootstore_shipping))}</td>' +
+            f'<td>{cell(fmt(r.lootstore_total))}</td>' +
             f'<td>{cell(diff)}</td>' +
-            f'<td class="checked">{cell(r.last_checked)}</td>' +
+            f'<td>{cell(loot_diff)}</td>' +
             '</tr>')
     table_css = """
     <style>
-    .lbrixx-scroll {overflow-x:auto; width:100%; border:1px solid rgba(128,128,128,.25); border-radius:10px;}
-    .lbrixx-table {width:100%; border-collapse:collapse; font-size:14px; min-width:1050px;}
-    .lbrixx-table th {text-align:left; font-weight:650; padding:12px 10px; background:rgba(128,128,128,.13); white-space:nowrap;}
+    .lbrixx-scroll {overflow:auto; max-height:70vh; width:100%; border:1px solid rgba(128,128,128,.25); border-radius:10px;}
+    .lbrixx-table {width:100%; border-collapse:collapse; font-size:14px; min-width:1450px;}
+    .lbrixx-table th {position:sticky;top:0;z-index:2;text-align:left; font-weight:650; padding:12px 10px; background:rgba(128,128,128,.13); white-space:nowrap;}
     .lbrixx-table td {padding:10px; border-top:1px solid rgba(128,128,128,.2); vertical-align:middle;}
-    .lbrixx-table tr:hover td:not(.brickmo-price) {background:rgba(128,128,128,.06);}
+    .lbrixx-table tr:hover td:not(.shop-price) {background:rgba(128,128,128,.06);}
     .lbrixx-table .edit a {display:inline-block; padding:7px 9px; border:1px solid rgba(128,128,128,.45); border-radius:7px; white-space:nowrap; text-decoration:none; color:inherit; font-weight:600;}\n    .lbrixx-table .edit a:hover {background:rgba(128,128,128,.16);}\n    .lbrixx-table .photo img {width:65px; height:65px; object-fit:contain; border-radius:5px;}
     .lbrixx-table .description {min-width:220px;}
     .lbrixx-table .checked {font-size:12px; white-space:nowrap;}
-    .lbrixx-table .brickmo-price {font-weight:700; white-space:nowrap;}
-    .lbrixx-table .brickmo-price.available {background:#c8f3d2; color:#13532c;}
-    .lbrixx-table .brickmo-price.unknown {background:#fff0ae; color:#704d00;}
-    .lbrixx-table .brickmo-price.unavailable {background:#ffd1d1; color:#7b1e1e;}
-    .lbrixx-table .brickmo-price a {color:inherit; text-decoration:underline; text-underline-offset:3px;}
-    .lbrixx-table .brickmo-price a:hover {text-decoration-thickness:2px;}
+    .lbrixx-table .shop-price {font-weight:700; white-space:nowrap; min-width:115px;}
+    .lbrixx-table .shop-price.available {background:#B7E1A1; color:#173B20;}
+    .lbrixx-table .shop-price.unknown {background:#006CB7; color:#FFFFFF;}
+    .lbrixx-table .shop-price.unavailable {background:#D01012; color:#FFFFFF;}
+    .lbrixx-table .shop-price a {color:inherit; text-decoration:underline; text-underline-offset:3px;}
+    .lbrixx-table .shop-price .timestamp {font-size:11px; font-weight:400; margin-top:5px; opacity:.9;}
     </style>
     """
-    headings=['Edit','Foto','SKU','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Stand']
-    table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(f'<th>{cell(h)}</th>' for h in headings)+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
+    headings=['Aktionen','Foto','SKU','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Lootstore-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Differenz LBrixx − Lootstore']
+    sort_fields=['','', 'sku','ean','lbrixx_sku','description','lbrixx_price','brickmo_price','shipping','total','lootstore_price','lootstore_shipping','lootstore_total','difference','loot_difference']
+    def heading(h,k):
+        if not k: return f'<th>{cell(h)}</th>'
+        next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
+        arrow=(' ▲' if sort_direction=='asc' else ' ▼') if sort_field==k else ''
+        return f'<th><a href="?sort={k}&dir={next_dir}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
+    table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
     st.html(table_html)
-    st.caption('Farben im Brickmo-Preisfeld: 🟢 lieferbar · 🟡 unbestätigt · 🔴 nicht lieferbar. Preis anklicken, um das Produkt bei Brickmo zu öffnen.')
-    c1,c2,c3=st.columns([1,1,2])
-    with c1: update=st.button('🔄 Alle Preise aktualisieren',type='primary',use_container_width=True)
-    with c2: st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv',use_container_width=True)
-    with c3: st.caption('Nur eindeutig lieferbare Artikel zählen für das Ranking.')
-    if update:
-        bar=st.progress(0); new=df.copy()
-        for i,row in df.iterrows():
-            if not str(row.brickmo_url).strip():
-                bar.progress((i+1)/len(df))
-                continue
+    st.caption('Preisfelder: LEGO-Hellgrün = lieferbar · LEGO-Blau = unbestätigt · LEGO-Rot = nicht lieferbar. Zeitstempel in UTC. Preis anklicken öffnet den Shop.')
+    st.markdown('#### Preise aktualisieren')
+    st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Zwischen Shop-Anfragen liegen mindestens 2 Sekunden. HTTP 429 stoppt die jeweilige Serie. Zeitangaben sind UTC.')
+    a,b,c=st.columns([1,1,1])
+    with a: brickmo_update=st.button('🔄 Brickmo komplett',use_container_width=True)
+    with b: loot_update=st.button('🔄 Lootstore komplett',use_container_width=True)
+    with c: st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv',use_container_width=True)
+    active=df.loc[~deleted_mask & ~hidden_mask]
+    selectable={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":int(i) for i,r in active.iterrows()}
+    chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
+    provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Beide'])
+    one_update=st.button('🔄 Gewählten Artikel aktualisieren')
+    if brickmo_update or loot_update or one_update:
+        new=df.copy()
+        shops=['brickmo'] if brickmo_update else ['lootstore'] if loot_update else ['brickmo','lootstore'] if provider=='Beide' else [provider.lower()]
+        if one_update and chosen=='Bitte Artikel wählen':
+            st.warning('Bitte zunächst einen Artikel auswählen.')
+        else:
+            for shop in shops:
+                url_field='brickmo_url' if shop=='brickmo' else 'lootstore_url'
+                subset=[selectable[chosen]] if one_update else list(active.index)
+                indices=[i for i in subset if str(new.at[i,url_field]).strip()]
+                if not indices:
+                    st.info(f'{shop}: Keine hinterlegten Links für die Auswahl.')
+                    continue
+                st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
+                new,ok,failed=update_prices(new,shop,indices)
+                st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
             try:
-                result=parse_product(row.brickmo_url)
-                for k,v in result.items():
-                    if k=='sku' and row.sku: continue
-                    if k=='description' and row.description: continue
-                    if k=='brickmo_photo' and not v: continue
-                    new.at[i,k]=v
-            except Exception as e:
-                new.at[i,'error']=str(e); new.at[i,'availability']='Unbestätigt'
-            bar.progress((i+1)/len(df))
-        try: save(new); st.success('Preisprüfung abgeschlossen.'); st.rerun()
-        except Exception as e: st.error(f'Ergebnisse konnten nicht gespeichert werden: {e}')
+                save(new); st.success('Preisprüfung gespeichert.'); st.rerun()
+            except Exception as exc: st.error(f'Speichern fehlgeschlagen: {exc}')
 
-    with st.expander('✏️ Artikel bearbeiten / löschen'):
-        edited=st.data_editor(df[['sku','lbrixx_sku','description','lbrixx_price','brickmo_url']].copy(),hide_index=True,num_rows='dynamic',use_container_width=True,key='editor',column_config={'brickmo_url':st.column_config.TextColumn('Brickmo-URL',width='large'),'lbrixx_price':st.column_config.TextColumn('LBrixx-Preis €')})
-        if st.button('Änderungen speichern'):
-            if edited.loc[edited.sku.ne(''),'sku'].duplicated().any() or edited.loc[edited.brickmo_url.ne(''),'brickmo_url'].duplicated().any(): st.error('Doppelte SKU oder Produkt-URL gefunden.')
-            elif any(u.strip() and not valid_url(u) for u in edited.brickmo_url): st.error('Ungültiger Brickmo-Link.')
-            elif any(x and euro_num(x) is None for x in edited.lbrixx_price): st.error('LBrixx-Preis muss eine Zahl sein.')
-            else:
-                rows=[]
-                for pos, (_,r) in enumerate(edited.iterrows()):
-                    original=df.iloc[pos] if pos < len(df) else None
-                    item=original.to_dict() if original is not None else {c:'' for c in COLUMNS}
-                    old_url=item.get('brickmo_url','')
-                    item.update(r.to_dict())
-                    if old_url != item['brickmo_url']:
-                        for field in ('brickmo_price','shipping','total','availability','last_checked','error','brickmo_photo'):
-                            item[field]=''
-                    rows.append(item)
-                try: save(pd.DataFrame(rows)); st.success('Gespeichert.'); st.rerun()
-                except Exception as e: st.error(f'Speichern fehlgeschlagen: {e}')
+    st.caption('Zum Bearbeiten, Ausblenden oder Löschen bitte die Aktionen direkt am Anfang der jeweiligen Tabellenzeile verwenden.')
 
 with st.expander('📥 Artikel aus CSV importieren'):
     file=st.file_uploader('CSV mit mindestens brickmo_url, optional sku, lbrixx_sku, description, lbrixx_price',type='csv')
@@ -479,11 +626,32 @@ with st.expander('📥 Artikel aus CSV importieren'):
             if 'brickmo_url' not in incoming.columns: raise ValueError('Spalte brickmo_url fehlt.')
             if not all(not u.strip() or valid_url(u) for u in incoming.brickmo_url): raise ValueError('Mindestens eine URL ist ungültig.')
             incoming=normalize(incoming)
-            combined=pd.concat([st.session_state.products,incoming],ignore_index=True).drop_duplicates(subset='brickmo_url',keep='first')
+            combined=pd.concat([st.session_state.products,incoming],ignore_index=True)
+            # Keep every distinct Odoo article; deduplicate only non-empty matching Odoo IDs.
+            ids=combined.odoo_id.astype(str).str.strip()
+            combined=combined.loc[~(ids.ne('') & ids.duplicated(keep='first'))]
             save(combined); st.success('CSV importiert. Jetzt „Alle Preise aktualisieren“ klicken.'); st.rerun()
         except Exception as e: st.error(str(e))
 
-with st.expander('⚙️ Dauerhafte Speicherung über GitHub einrichten'):
-    st.markdown('Optional in **Streamlit Community Cloud → App settings → Secrets** hinterlegen (nicht in GitHub-Dateien):')
-    st.code('GITHUB_REPO = "DEIN-USERNAME/lbrixx-pricecrawler"\nGITHUB_TOKEN = "github_pat_..."\nGITHUB_DATA_PATH = "data/lbrixx_products.csv"',language='toml')
-    st.caption('Ein Fine-grained GitHub Token benötigt nur Contents: Read and write für dieses Repository. Die App speichert die Produktliste als CSV in GitHub. Niemals Tokens im Chat oder in app.py veröffentlichen.')
+with st.expander('📈 Preisverlauf je Artikel'):
+    available=st.session_state.products
+    choices={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":str(r.db_id) for _,r in available.iterrows() if str(r.db_id).strip()}
+    if choices:
+        selected=st.selectbox('Produkt für Preisverlauf',list(choices),key='history_product')
+        include_shipping=st.toggle('Versandkosten einbeziehen',value=False)
+        try:
+            history=db_store.history(DB_URL,choices[selected])
+            if history.empty:
+                st.info('Noch keine historischen Preisabfragen vorhanden. Der Verlauf beginnt mit der nächsten erfolgreichen Abfrage.')
+            else:
+                history['Wert']=history['price'].astype(float)
+                if include_shipping: history['Wert']+=history['shipping_cost'].fillna(0).astype(float)
+                chart=history.pivot_table(index='recorded_at',columns='merchant',values='Wert',aggfunc='last')
+                st.line_chart(chart)
+                st.dataframe(history.sort_values('recorded_at',ascending=False),hide_index=True,use_container_width=True)
+        except Exception as exc: st.error(f'Preisverlauf nicht verfügbar: {exc}')
+    else: st.info('Zuerst Produkte importieren.')
+
+with st.expander('🗄️ PostgreSQL-Verbindung'):
+    st.write('Datenspeicherung: Supabase PostgreSQL')
+    st.caption('Die Verbindung erfolgt serverseitig über SUPABASE_DB_URL. Keine Zugangsdaten in GitHub hinterlegen.')
