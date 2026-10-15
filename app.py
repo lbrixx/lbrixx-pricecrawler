@@ -1,56 +1,51 @@
 import re
 from datetime import datetime, timezone
-import requests
 import streamlit as st
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-ASIN = 'B0DYV3XVZ6'
-URL = f'https://www.amazon.de/dp/{ASIN}'
-st.set_page_config(page_title='LBrixx Amazon Diagnose V3')
-st.title('LBrixx Amazon-Diagnose V3')
-st.write(f'**Artikel:** 17003 · FUNWHOLE Future Bus · **ASIN:** {ASIN}')
+URL = 'https://www.amazon.de/dp/B0DYV3XVZ6'
+st.set_page_config(page_title='LBrixx Amazon Diagnose V4', page_icon='🔎')
+st.title('LBrixx Amazon-Diagnose V4')
+st.write('**Artikel:** 17003 · FUNWHOLE Future Bus · **ASIN:** B0DYV3XVZ6')
 st.link_button('Amazon-Artikel öffnen', URL)
-st.caption('Referenzpreis im Browser: 52,90 € inklusive Versand. Kein automatisch bestätigter Preis.')
+st.caption('Referenzwert aus deinem Browser: 52,90 € inkl. Versand. Kein automatisch bestätigter Preis.')
 
-if st.button('HTML auf Referenzpreis prüfen', type='primary'):
-    try:
-        with st.spinner('Amazon-Produktseite wird abgerufen …'):
-            response = requests.get(URL, headers={
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-                'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            }, timeout=25)
-        html = response.text
-        soup = BeautifulSoup(html, 'html.parser')
-        st.write('**Prüfzeitpunkt (UTC):**', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
-        st.write('**HTTP-Status:**', response.status_code)
-        st.write('**Antwortgröße:**', len(response.content), 'Bytes')
-        st.write('**Seitentitel:**', soup.title.get_text(' ', strip=True) if soup.title else 'Nicht vorhanden')
-        st.write('**Weiterleitungsziel:**', response.url)
-        patterns = {
-            '52,90': r'52,90',
-            '52.90': r'52\.90',
-            '5.290 / 5290 (mögliche Cent-Angabe)': r'(?<!\d)5290(?!\d)',
-            'HTML-kodiert (52&#44;90 / 52\\u002c90)': r'52(?:&#44;|&#x2c;|\\u002[cC]|%2[Cc])90',
-            'Getrennte Preisbestandteile (52 + 90)': r'52\s*</span>\s*<span[^>]*>\s*90',
-        }
-        st.subheader('Fundstellen des Referenzpreises')
-        found = False
-        for label, pattern in patterns.items():
-            matches = list(re.finditer(pattern, html, flags=re.IGNORECASE))
-            st.write(f'**{label}:** {len(matches)} Treffer')
-            if matches:
-                found = True
-                with st.expander(f'Kontext für {label} (maximal 3 Beispiele)'):
-                    for m in matches[:3]:
-                        excerpt = html[max(0, m.start()-120):min(len(html), m.end()+120)]
-                        excerpt = re.sub(r'(?i)(token|session|cookie|password|secret|key)(["\s:=]+)[^\s,"}]+', r'\1\2[REDACTED]', excerpt)
-                        st.code(excerpt[:280], language='text')
-        st.subheader('Diagnose')
-        if found:
-            st.warning('Der Referenzbetrag kommt im HTML vor. Das beweist noch nicht, dass es der aktuelle Angebotspreis ist; er kann auch in anderen Daten stehen.')
-        else:
-            st.info('Keine der geprüften Schreibweisen gefunden. Möglicherweise liefert Amazon an den Server eine andere Preisdarstellung oder keinen Angebotspreis.')
-        st.caption('Es werden keine vollständigen HTML-Seiten, Cookies oder Sitzungsdaten angezeigt oder gespeichert.')
-    except requests.RequestException as exc:
-        st.error(f'Netzwerkfehler: {type(exc).__name__}: {exc}')
+if st.button('Browser-Abfrage testen', type='primary'):
+    with st.spinner('Chromium öffnet die Amazon-Seite …'):
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+                page = browser.new_page(locale='de-DE', timezone_id='Europe/Berlin', viewport={'width': 1280, 'height': 900})
+                response = page.goto(URL, wait_until='domcontentloaded', timeout=45000)
+                page.wait_for_timeout(3500)
+                st.write('**Zeitpunkt (UTC):**', datetime.now(timezone.utc).isoformat(timespec='seconds'))
+                st.write('**HTTP-Status:**', response.status if response else 'Keine Antwort')
+                st.write('**Endgültige URL:**', page.url)
+                st.write('**Seitentitel:**', page.title())
+                body_text = page.locator('body').inner_text(timeout=12000)
+                blocked = any(x in body_text.lower() for x in ['zeichen eingeben', 'geben sie die zeichen', 'captcha', 'robot check'])
+                st.write('**CAPTCHA-/Blockadehinweis:**', 'Möglicherweise' if blocked else 'Kein typischer Hinweis erkannt')
+                selectors = ['#corePrice_feature_div .a-offscreen', '#corePriceDisplay_desktop_feature_div .a-offscreen', '.priceToPay .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '#apex_desktop .a-offscreen']
+                candidates = []
+                for selector in selectors:
+                    try:
+                        values = page.locator(selector).all_text_contents()
+                        for value in values[:5]:
+                            cleaned = ' '.join(value.split())
+                            if cleaned and re.search(r'\d+[,.]\d{2}', cleaned):
+                                candidates.append({'Quelle': selector, 'Text': cleaned[:100]})
+                    except Exception:
+                        pass
+                if candidates:
+                    st.write('**Preis-Kandidaten (nicht verifiziert):**')
+                    st.dataframe(candidates, use_container_width=True)
+                else:
+                    st.warning('Kein Preis in den geprüften sichtbaren Preisfeldern gefunden.')
+                st.write('**Referenzpreis im sichtbaren Seitentext:**', 'Ja' if '52,90' in body_text or '52.90' in body_text else 'Nein')
+                st.info('Ein Treffer ist noch kein bestätigter Kaufpreis. Versand, Gutscheine und Verkäufer müssen separat geprüft werden.')
+                browser.close()
+        except PlaywrightTimeoutError:
+            st.error('Zeitüberschreitung beim Browserabruf. Kein Preis erfasst.')
+        except Exception as exc:
+            st.error(f'Browserabruf fehlgeschlagen: {type(exc).__name__}: {str(exc)[:500]}')
+            st.caption('Prüfe, ob Chromium auf dem Hoster installiert wurde (packages.txt und postBuild).')
