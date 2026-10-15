@@ -1,11 +1,5 @@
-# LBrixx Amazon-Diagnose V6
+# LBrixx Amazon Browser-Test V7
 
-## Streamlit Community Cloud
+Lade `app.py` und `requirements.txt` ins Hauptverzeichnis deines GitHub-Repositories. Die App installiert beim ersten Button-Klick Chromium über den Python-Interpreter der laufenden Streamlit-App (`sys.executable`). Die Installation kann auf kostenlosen Hostern an fehlenden Systembibliotheken oder Ressourcen scheitern. Ein HTTP-200-Status oder ein gefundener Preis-Kandidat ist noch keine Bestätigung des Kaufpreises inklusive Versand.
 
-1. `app.py`, `requirements.txt` und `packages.txt` in das **Hauptverzeichnis** des GitHub-Repositories hochladen. Vorhandene Dateien ersetzen.
-2. Die App neu starten: Streamlit Community Cloud > Manage app > Reboot app. Logs auf Paketinstallationsfehler prüfen.
-3. Streamlit installiert Python-Pakete aus `requirements.txt`. Die Browser-Binärdatei von Playwright wird dadurch **nicht automatisch** installiert.
-4. Für einen ersten Test kann Chromium über die App-Verwaltung/Terminal der Laufzeit mit `python -m playwright install chromium` installiert werden, falls dort eine Shell bereitsteht. Bei Community Cloud gibt es normalerweise keinen dauerhaften Shell-Zugang. Deshalb ist der Browser auf dieser Plattform ohne geeigneten Build-Schritt möglicherweise nicht verfügbar.
-5. Wenn der Browser fehlt, ist das kein Amazon-Preisfehler. Dann eine Hosting-Umgebung mit reproduzierbarem Build (z. B. Docker) nutzen, statt Downloads bei jedem Nutzerklick auszuführen.
-
-**Hinweis:** Der Test ist rein diagnostisch. Es werden keine unbestätigten Preise gespeichert. Keine CAPTCHA-Umgehung oder Tarnung.
+Die App benötigt keine Zugangsdaten. Sie führt keine CAPTCHA-Umgehung aus.
