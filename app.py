@@ -32,7 +32,25 @@ def load():
     if GH_ENABLED:
         r=gh_request('GET')
         if r.status_code==200:
-            data=r.json(); content=base64.b64decode(data['content']).decode('utf-8-sig')
+            data=r.json()
+            encoded=data.get('content') or ''
+            # GitHub Contents API omits inline content for files over 1 MB.
+            # This can happen after importing many base64 product images from Odoo.
+            if not encoded and data.get('sha'):
+                blob_url=f'https://api.github.com/repos/{GH_REPO}/git/blobs/{data["sha"]}'
+                blob=requests.get(blob_url,headers={
+                    'Authorization':f'Bearer {GH_TOKEN}',
+                    'Accept':'application/vnd.github+json',
+                    'X-GitHub-Api-Version':'2022-11-28'
+                },timeout=60)
+                blob.raise_for_status()
+                blob_data=blob.json()
+                encoded=blob_data.get('content') or ''
+            if not encoded:
+                raise ValueError('Die GitHub-CSV ist leer oder konnte nicht vollständig gelesen werden. Bitte GitHub-Datei und Versionsverlauf prüfen; nichts überschreiben.')
+            content=base64.b64decode(encoded).decode('utf-8-sig')
+            if not content.strip():
+                raise ValueError('Die GitHub-CSV enthält keine Daten. Bitte über GitHub Versionsverlauf wiederherstellen; nichts überschreiben.')
             return pd.read_csv(io.StringIO(content),dtype=str,keep_default_na=False),data['sha']
         return pd.DataFrame(SEEDS),None
     if os.path.exists(DATA_FILE):
@@ -47,6 +65,8 @@ def normalize(df):
 def save(df):
     df=normalize(df)
     content=df.to_csv(index=False)
+    if len(content.encode('utf-8')) > 25_000_000:
+        raise ValueError('Die Produktdatei ist über 25 MB groß. Speichern abgebrochen, um die GitHub-Daten zu schützen.')
     if GH_ENABLED:
         r=gh_request('GET'); sha=r.json().get('sha') if r.status_code==200 else None
         payload={'message':'Update LBrixx price crawler products','content':base64.b64encode(content.encode('utf-8')).decode('ascii')}
@@ -116,7 +136,7 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V24')
+st.title('🧱 LBrixx – Preisvergleich V25')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
