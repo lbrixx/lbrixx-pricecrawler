@@ -116,7 +116,7 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V21')
+st.title('🧱 LBrixx – Preisvergleich V22')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -128,7 +128,7 @@ def odoo_read(limit=5, offset=0):
         raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
     endpoint=ODOO_URL+'/json/2/product.product/search_read'
     headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
-    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price'],'limit':limit,'offset':offset,'order':'id asc'}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
     response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
     if not response.ok:
         raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
@@ -168,7 +168,7 @@ def odoo_merge(existing, products):
     return normalize(result),added,updated,skipped
 
 with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded=False):
-    st.caption('Nur lesender Zugriff auf Odoo. Ein API-Schlüssel allein garantiert beim Standard-Tarif keinen externen API-Zugang.')
+    st.caption('Odoo wird nur gelesen. Produktnamen werden mit deutschem Sprachkontext (de_DE) abgefragt. Fehlt eine Übersetzung, liefert Odoo ggf. den ursprünglichen Namen.')
     st.write('Server:', ODOO_URL or 'Nicht konfiguriert')
     col_test,col_import=st.columns(2)
     with col_test:
@@ -178,7 +178,7 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
     if test_odoo:
         try:
             sample=odoo_read(limit=5)
-            st.success(f'Verbindung erfolgreich: {len(sample)} Beispielartikel abgerufen.')
+            st.success(f'Verbindung erfolgreich: {len(sample)} Beispielartikel mit Sprache de_DE abgerufen.')
             st.dataframe(pd.DataFrame([{'Odoo-ID':p.get('id'),'SKU':p.get('default_code'),'Artikel':p.get('name'),'Preis (€)':p.get('list_price')} for p in sample]),hide_index=True,use_container_width=True)
         except Exception as exc:
             st.error(str(exc))
@@ -361,6 +361,9 @@ else:
     if update:
         bar=st.progress(0); new=df.copy()
         for i,row in df.iterrows():
+            if not str(row.brickmo_url).strip():
+                bar.progress((i+1)/len(df))
+                continue
             try:
                 result=parse_product(row.brickmo_url)
                 for k,v in result.items():
