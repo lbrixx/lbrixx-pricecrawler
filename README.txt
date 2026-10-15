@@ -1,7 +1,8 @@
-LBrixx Price-Crawler V23
+LBrixx Price-Crawler V24 – Odoo-Produktbilder als bevorzugte Bildquelle.
 
-NEU: Sortierung der Artikelübersicht nach SKU, Odoo-ID, Beschreibung, Preisen, Preisdifferenz, Verfügbarkeit oder letztem Abruf. Auf- und absteigend. Fehlende Werte stehen am Ende.
-
-WICHTIG: Sortierung ändert ausschließlich die Darstellung. Edit-Buttons referenzieren weiterhin die ursprüngliche Zeilenposition. GitHub-Daten, Odoo-Zuordnung und Wettbewerberlinks bleiben unverändert.
-
-INSTALLATION: app.py und requirements.txt aus dem ZIP in GitHub ersetzen. Streamlit-Secrets nicht ändern.
+Odoo JSON-2 importiert image_128 (128-Pixel-Vorschaubild) und speichert es in der bestehenden GitHub-CSV.
+Brickmo-Bilder werden nur als Ersatzbild gespeichert und angezeigt, wenn Odoo kein Bild liefert.
+Bestehende Odoo-IDs, SKUs, Links und Preisdaten bleiben erhalten.
+Nach Installation in Streamlit „Odoo-Produkte importieren / aktualisieren“ ausführen.
+Vorher CSV-Sicherung herunterladen.
+Keine neuen Secrets nötig.

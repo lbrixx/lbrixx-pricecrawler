@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
 DATA_FILE = 'lbrixx_products.csv'
-COLUMNS = ['odoo_id','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_price','shipping','total','availability','last_checked','error']
+COLUMNS = ['odoo_id','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error']
 SEEDS = [
  {'sku':'FO9060','lbrixx_sku':'17003','description':'FunWhole Cyberpunk Future Bus','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'},
  {'sku':'FO9043','lbrixx_sku':'','description':'FunWhole Cyberpunk Polizeiauto','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82178/funwhole-cyberpunk-fo9043-polizeiauto-fo9043'},
@@ -108,7 +108,7 @@ def parse_product(url):
     sku=''
     match=re.search(r'\bFO\d{4,6}\b',title+' '+url,re.I)
     if match: sku=match.group(0).upper()
-    return {'sku':sku,'description':title,'photo':image,'brickmo_price':f'{price:.2f}','shipping':'5.49','total':f'{price+5.49:.2f}','availability':availability,'last_checked':datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),'error':''}
+    return {'sku':sku,'description':title,'brickmo_photo':image,'brickmo_price':f'{price:.2f}','shipping':'5.49','total':f'{price+5.49:.2f}','availability':availability,'last_checked':datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),'error':''}
 
 if 'products' not in st.session_state:
     try:
@@ -116,7 +116,7 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V23')
+st.title('🧱 LBrixx – Preisvergleich V24')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -128,7 +128,7 @@ def odoo_read(limit=5, offset=0):
         raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
     endpoint=ODOO_URL+'/json/2/product.product/search_read'
     headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
-    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','image_128'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
     response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
     if not response.ok:
         raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
@@ -155,8 +155,26 @@ def odoo_merge(existing, products):
         index=matching[0] if matching else None
         name=str(product.get('name') or '')
         price=euro_num(product.get('list_price'))
+        raw_image=product.get('image_128')
+        # Odoo image_128 is a base64-encoded thumbnail (or False).
+        # Keep the old Odoo image if Odoo has no image for this product.
+        odoo_photo=''
+        if isinstance(raw_image,str) and raw_image.strip():
+            try:
+                image_bytes=base64.b64decode(raw_image,validate=True)
+                if len(image_bytes) <= 120_000:
+                    mime='image/png' if image_bytes.startswith(b'\x89PNG') else 'image/jpeg'
+                    odoo_photo=f'data:{mime};base64,{raw_image}'
+            except (ValueError,base64.binascii.Error):
+                pass
         patch={'odoo_id':oid,'description':name,'lbrixx_price':f'{price:.2f}' if price is not None else ''}
+        if odoo_photo: patch['photo']=odoo_photo
         if sku: patch['sku']=sku
+        if index is not None:
+            old_photo=str(result.at[index,'photo']).strip()
+            if old_photo.startswith('https://') and not str(result.at[index,'brickmo_photo']).strip():
+                result.at[index,'brickmo_photo']=old_photo
+                result.at[index,'photo']=''
         if index is None:
             # New products without competitor links can be enriched later.
             record={c:'' for c in COLUMNS}; record.update(patch)
@@ -287,7 +305,7 @@ if edit_param != '':
                 updated.at[edit_index, 'brickmo_url'] = cleaned_url
                 # A changed URL invalidates the old shop price and availability until rechecked.
                 if cleaned_url != str(current['brickmo_url']):
-                    for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'photo'):
+                    for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'brickmo_photo'):
                         updated.at[edit_index, field] = ''
                 try:
                     save(updated)
@@ -348,8 +366,11 @@ else:
 
     rows=[]
     for row_idx, r in df_display.iterrows():
+        # Odoo is the primary image source; Brickmo is only a fallback.
         photo=str(r.photo).strip()
-        img=f'<img src="{cell(photo)}" alt="Produktfoto" loading="lazy">' if photo.startswith('https://') else '–'
+        fallback=str(r.brickmo_photo).strip()
+        chosen=photo if photo.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else fallback
+        img=f'<img src="{cell(chosen)}" alt="Produktfoto" loading="lazy">' if chosen.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else '–'
         a=euro_num(r.lbrixx_price); b=euro_num(r.total)
         diff=fmt(round(a-b,2)) if a is not None and b is not None else '–'
         rows.append('<tr>' +
@@ -402,7 +423,7 @@ else:
                 for k,v in result.items():
                     if k=='sku' and row.sku: continue
                     if k=='description' and row.description: continue
-                    if k=='photo' and not v: continue
+                    if k=='brickmo_photo' and not v: continue
                     new.at[i,k]=v
             except Exception as e:
                 new.at[i,'error']=str(e); new.at[i,'availability']='Unbestätigt'
@@ -424,7 +445,7 @@ else:
                     old_url=item.get('brickmo_url','')
                     item.update(r.to_dict())
                     if old_url != item['brickmo_url']:
-                        for field in ('brickmo_price','shipping','total','availability','last_checked','error','photo'):
+                        for field in ('brickmo_price','shipping','total','availability','last_checked','error','brickmo_photo'):
                             item[field]=''
                     rows.append(item)
                 try: save(pd.DataFrame(rows)); st.success('Gespeichert.'); st.rerun()
