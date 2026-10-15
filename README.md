@@ -1,5 +1,7 @@
-# LBrixx Amazon Browser-Test V7
+# LBrixx Amazon-Diagnose V8
 
-Lade `app.py` und `requirements.txt` ins Hauptverzeichnis deines GitHub-Repositories. Die App installiert beim ersten Button-Klick Chromium über den Python-Interpreter der laufenden Streamlit-App (`sys.executable`). Die Installation kann auf kostenlosen Hostern an fehlenden Systembibliotheken oder Ressourcen scheitern. Ein HTTP-200-Status oder ein gefundener Preis-Kandidat ist noch keine Bestätigung des Kaufpreises inklusive Versand.
+Ersetzt `app.py` und `requirements.txt` im GitHub-Repository. In Streamlit neu starten und „Browser-Screenshot und Preisbereiche prüfen“ klicken.
 
-Die App benötigt keine Zugangsdaten. Sie führt keine CAPTCHA-Umgehung aus.
+**Hinweis:** V8 setzt voraus, dass Chromium auf dem Streamlit-Server vorhanden ist. Wenn es nach einem Neustart fehlt, kann man die in V7 funktionierende Installationsroutine wiederverwenden oder den Browser beim Deployment installieren. Der Browser ist nicht dauerhaft auf jeder kostenlosen Streamlit-Instanz gespeichert.
+
+Die Diagnose zeigt einen Screenshot und sichtbare Texte aus ausgewählten Amazon-Elementen. Sie speichert keine Login-Daten und setzt keinen bestätigten Preis, solange er nicht eindeutig festgestellt wurde.
