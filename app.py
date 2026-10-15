@@ -1,56 +1,68 @@
-import io
+import os
 import re
+import sys
+import subprocess
 from datetime import datetime, timezone
 import streamlit as st
-from playwright.sync_api import sync_playwright, Error as PlaywrightError
+from playwright.sync_api import sync_playwright
 
-URL = 'https://www.amazon.de/dp/B0DYV3XVZ6'
-st.set_page_config(page_title='LBrixx Amazon-Diagnose V8', layout='wide')
-st.title('LBrixx Amazon-Diagnose V8')
-st.write('**Artikel:** 17003 · FUNWHOLE Future Bus · **ASIN:** B0DYV3XVZ6')
+ASIN = 'B0DYV3XVZ6'
+URL = f'https://www.amazon.de/dp/{ASIN}'
+st.set_page_config(page_title='LBrixx Amazon Diagnose V9', layout='wide')
+st.title('LBrixx Amazon-Diagnose V9')
+st.write('Artikel 17003 · FUNWHOLE Future Bus · ASIN B0DYV3XVZ6')
 st.link_button('Amazon-Artikel öffnen', URL)
-st.caption('Referenzpreis aus deinem Browser: 52,90 € inklusive Versand. Kein automatisch bestätigter Preis.')
-st.info('Diese Diagnose zeigt die tatsächlich gerenderte Amazon-Seite. Keine automatischen Preise werden erfunden oder gespeichert.')
+st.caption('Referenzpreis im eigenen Browser: 52,90 € inklusive Versand. Kein automatisch bestätigter Preis.')
+
+@st.cache_resource(show_spinner='Chromium wird für diese Server-Sitzung vorbereitet …')
+def ensure_browser():
+    with sync_playwright() as p:
+        path = p.chromium.executable_path
+    if os.path.isfile(path):
+        return path, 'Bereits installiert'
+    proc = subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0:
+        raise RuntimeError('Chromium-Installation fehlgeschlagen: ' + (proc.stderr or proc.stdout)[-2500:])
+    with sync_playwright() as p:
+        path = p.chromium.executable_path
+    if not os.path.isfile(path):
+        raise RuntimeError(f'Installation meldete Erfolg, Browserdatei fehlt aber: {path}')
+    return path, 'Neu installiert'
 
 if st.button('Browser-Screenshot und Preisbereiche prüfen', type='primary'):
     st.write('Prüfzeitpunkt (UTC):', datetime.now(timezone.utc).isoformat())
     try:
+        path, status = ensure_browser()
+        st.success(f'Chromium: {status}')
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+            browser = p.chromium.launch(headless=True, args=['--no-sandbox'])
             context = browser.new_context(locale='de-DE', timezone_id='Europe/Berlin', viewport={'width': 1365, 'height': 900})
             page = context.new_page()
-            response = page.goto(URL, wait_until='domcontentloaded', timeout=45000)
-            page.wait_for_timeout(3500)
-            st.write('HTTP-Status:', response.status if response else 'Keine Antwort')
+            response = page.goto(URL, wait_until='domcontentloaded', timeout=60000)
+            page.wait_for_timeout(4000)
+            st.write('HTTP-Status:', response.status if response else 'Unbekannt')
             st.write('Seitentitel:', page.title())
-            st.write('Endgültige URL:', page.url)
-            screenshot = page.screenshot(full_page=True, animations='disabled')
-            st.subheader('Screenshot der Server-Browsersitzung')
-            st.image(screenshot, caption='Was Chromium auf Streamlit tatsächlich sieht', use_container_width=True)
-            st.download_button('Screenshot herunterladen', screenshot, file_name='amazon_17003_server.png', mime='image/png')
-            st.subheader('Sichtbare Preisbereiche')
-            selectors = ['#corePrice_feature_div', '#corePriceDisplay_desktop_feature_div', '#apex_desktop', '#price', '.a-price', '#buybox', '#availability', '#deliveryBlockMessage', '#contextualIngressPtLabel']
-            found = 0
+            st.write('Seitenadresse:', page.url)
+            screenshot = page.screenshot(full_page=True, timeout=30000)
+            st.image(screenshot, caption='Screenshot des automatisierten Browsers', use_container_width=True)
+            st.download_button('Screenshot herunterladen', screenshot, file_name='amazon_17003_browser.png', mime='image/png')
+            selectors = ['#corePrice_feature_div', '#corePriceDisplay_desktop_feature_div', '#apex_desktop', '#buybox', '.a-price', '[data-a-color="price"]']
             for selector in selectors:
-                locator = page.locator(selector)
-                count = min(locator.count(), 4)
+                loc = page.locator(selector)
+                count = min(loc.count(), 3)
+                snippets = []
                 for i in range(count):
-                    item = locator.nth(i)
                     try:
-                        if item.is_visible(timeout=1000):
-                            snippet = re.sub(r'\s+', ' ', item.inner_text(timeout=2000)).strip()[:500]
-                            if snippet:
-                                st.write(f'**{selector}**: {snippet}')
-                                found += 1
+                        value = loc.nth(i).inner_text(timeout=2000).strip()
+                        if value:
+                            snippets.append(value[:350])
                     except Exception:
                         pass
-            if not found:
-                st.warning('Keiner der untersuchten Preis- oder Angebotsbereiche enthielt sichtbaren Text.')
-            st.caption('Preisangaben in diesen Bereichen sind zunächst nur Diagnosehinweise und noch kein verifizierter Gesamtpreis inklusive Versand.')
-            context.close()
+                st.write(f'{selector}:', snippets if snippets else 'Keine sichtbaren Inhalte')
+            text = page.locator('body').inner_text(timeout=10000)
+            st.write('Referenzpreis im sichtbaren Text:', 'Ja' if re.search(r'52\s*[,\.]\s*90', text) else 'Nein')
+            st.info('Preisangaben sind Diagnosewerte, keine automatisch bestätigten Kaufpreise. Versand und Verkäufer müssen separat geprüft werden.')
             browser.close()
-    except PlaywrightError as exc:
-        st.error(f'Browserfehler: {exc}')
-        st.info('Wenn Chromium fehlt, muss es in der aktiven Python-Umgebung mit python -m playwright install chromium installiert werden. Die erfolgreiche V7-Browserinstallation kann nach einem Neustart verloren gehen.')
     except Exception as exc:
-        st.error(f'Diagnose fehlgeschlagen: {type(exc).__name__}: {exc}')
+        st.error(f'Browser-Test fehlgeschlagen: {type(exc).__name__}: {exc}')
+        st.info('Falls Linux-Systembibliotheken fehlen, die Streamlit-Build-Logs prüfen. Browserinstallationen im laufenden Container sind möglicherweise nach einem Neustart verloren.')
