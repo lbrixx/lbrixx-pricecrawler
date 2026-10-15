@@ -237,6 +237,7 @@ def odoo_merge(existing, products):
 with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded=False):
     st.caption('Odoo wird nur gelesen. Produktnamen werden mit deutschem Sprachkontext (de_DE) abgefragt. Fehlt eine Übersetzung, liefert Odoo ggf. den ursprünglichen Namen.')
     st.write('Server:', ODOO_URL or 'Nicht konfiguriert')
+    import_scope=st.radio('Importumfang', ['5 Testartikel', '100 Artikel', 'Alle Artikel'], horizontal=True, index=0)
     col_test,col_import=st.columns(2)
     with col_test:
         test_odoo=st.button('🔍 Odoo-Verbindung testen',use_container_width=True)
@@ -252,11 +253,13 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
     if import_odoo:
         try:
             all_products=[]
-            for offset in range(0,10000,100):
-                batch=odoo_read(limit=100,offset=offset)
+            max_items={'5 Testartikel':5,'100 Artikel':100,'Alle Artikel':10000}[import_scope]
+            for offset in range(0,max_items,100):
+                batch_limit=min(100,max_items-offset)
+                batch=odoo_read(limit=batch_limit,offset=offset)
                 all_products.extend(batch)
-                if len(batch)<100: break
-            else:
+                if len(batch)<batch_limit: break
+            if max_items==10000 and len(all_products)==10000:
                 st.warning('Import auf 10.000 Produkte begrenzt.')
             merged,added,updated,skipped=odoo_merge(st.session_state.products,all_products)
             save(merged)
