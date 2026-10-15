@@ -1,8 +1,7 @@
-LBrixx V25 – Fehlerbehebung GitHub CSV
+Separater LBrixx Supabase-Verbindungstest (kein Ersatz für V27).
 
-Ursache: Die GitHub Contents API gibt für Dateien über 1 MB ein leeres content-Feld zurück. Nach dem Odoo-Bildimport kann die CSV diese Grenze überschreiten.
-
-V25 lädt in diesem Fall den tatsächlichen Inhalt über die GitHub Git-Blobs-API nach.
-Eine wirklich leere Datei wird ausdrücklich als Fehler gemeldet und nicht stillschweigend ersetzt.
-
-Installation: app.py auf GitHub ersetzen, Streamlit neu starten. Vorher nichts speichern und den GitHub Versionsverlauf sichern.
+In GitHub in einem separaten Test-Ordner ablegen oder eine temporäre Test-App mit Hauptdatei db_test.py bereitstellen.
+Die App muss dieselben Streamlit-Secrets (SUPABASE_DB_URL) haben wie die Haupt-App; Secrets sind app-spezifisch.
+In Streamlit Community Cloud beim Anlegen der Test-App db_test.py als Main file path auswählen.
+Die App verbindet sich nur lesend und überprüft sieben Tabellen. Keine Datenänderungen.
+Wichtig: Keine Zugangsdaten ins Repository hochladen.
