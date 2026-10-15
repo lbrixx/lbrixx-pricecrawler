@@ -154,3 +154,30 @@ def record_own_price(url,product_id,price):
           DO UPDATE SET is_active=true RETURNING id""",(int(product_id),merchant['id']))
         offer=cur.fetchone()['id']
         cur.execute("INSERT INTO public.price_history(offer_id,price,shipping_cost,availability) VALUES(%s,%s,0,'available')",(offer,amount))
+
+
+def confirm_match(url,product_id,merchant,product_url):
+    """One offer update, without touching other products or current prices."""
+    if merchant not in ('Brickmo','Lootstore'):
+        raise ValueError('Unbekannter Händler')
+    from urllib.parse import urlparse
+    parsed=urlparse(product_url)
+    allowed={'Brickmo':('brickmo.com','www.brickmo.com'),'Lootstore':('lootstore.de','www.lootstore.de')}
+    if parsed.scheme!='https' or parsed.hostname not in allowed[merchant]:
+        raise ValueError('Ungültige Shop-URL')
+    clean=f'https://{parsed.hostname}{parsed.path}'.rstrip('/')
+    with connect(url) as conn,conn.cursor(row_factory=dict_row) as cur:
+        cur.execute('SELECT id FROM public.merchants WHERE name=%s',(merchant,))
+        merchant_row=cur.fetchone()
+        if not merchant_row: raise ValueError('Händler nicht gefunden')
+        cur.execute('SELECT id FROM public.products WHERE id=%s AND is_deleted=false',(int(product_id),))
+        if not cur.fetchone(): raise ValueError('Artikel nicht gefunden')
+        cur.execute('''SELECT p.id FROM public.offers o JOIN public.products p ON p.id=o.product_id
+          WHERE o.merchant_id=%s AND o.product_url=%s AND o.product_id<>%s AND o.is_active=true LIMIT 1''',
+          (merchant_row['id'],clean,int(product_id)))
+        if cur.fetchone(): raise ValueError('Dieser Shop-Link ist bereits einem anderen Artikel zugeordnet')
+        cur.execute('''INSERT INTO public.offers(product_id,merchant_id,product_url,match_status,is_active)
+          VALUES(%s,%s,%s,'confirmed',true)
+          ON CONFLICT(product_id,merchant_id) DO UPDATE SET product_url=excluded.product_url,
+          match_status='confirmed',is_active=true''',(int(product_id),merchant_row['id'],clean))
+    return clean

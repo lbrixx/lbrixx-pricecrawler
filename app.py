@@ -6,6 +6,7 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 import db_store
+import quickmatch
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
 DATA_FILE = 'lbrixx_products.csv'
@@ -350,6 +351,64 @@ with st.expander('➕ Lootstore-Artikel hinzufügen'):
                     st.rerun()
             except Exception as exc:
                 st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
+
+with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
+    st.caption('Sucht anhand der Hersteller-SKU (alternativ EAN) bei Brickmo und Lootstore. Es werden nur Vorschläge angezeigt. Eine Zuordnung erfolgt ausschließlich nach deiner Bestätigung. Suchergebnisse können unvollständig sein.')
+    mc1,mc2=st.columns(2)
+    with mc1:
+        match_merchant=st.selectbox('Shop', ['Brickmo','Lootstore'], key='match_merchant')
+    with mc2:
+        match_limit=st.selectbox('Maximale Artikel pro Suchlauf', [5,10,20], key='match_limit')
+    pending=st.session_state.products.copy()
+    url_col='brickmo_url' if match_merchant=='Brickmo' else 'lootstore_url'
+    pending=pending[(pending['deleted']!='1') & (pending[url_col].astype(str).str.strip()=='')]
+    pending=pending[(pending['sku'].astype(str).str.strip()!='') | (pending['ean'].astype(str).str.strip()!='')]
+    st.caption(f'{len(pending)} Artikel ohne {match_merchant}-Zuordnung mit SKU/EAN')
+    if st.button('Passende Shop-Artikel suchen',key='match_start',type='primary'):
+        results=[]; issues=[]
+        subset=pending.head(int(match_limit))
+        progress=st.progress(0)
+        with st.spinner('Shop-Suchergebnisse werden geprüft…'):
+            for n,(_,item) in enumerate(subset.iterrows(),1):
+                try:
+                    matches,issue=quickmatch.search(item.to_dict(),match_merchant)
+                    if issue: issues.append(f"{item['sku']}: {issue}")
+                    for candidate in matches:
+                        candidate.update({'product_id':str(item['db_id']),'sku':str(item['sku']),'product_name':str(item['description']),'merchant':match_merchant})
+                        results.append(candidate)
+                except Exception as exc:
+                    issues.append(f"{item['sku']}: {str(exc)[:120]}")
+                progress.progress(n/max(1,len(subset)))
+                if n<len(subset): time.sleep(1.5)
+        st.session_state.match_suggestions=results
+        st.session_state.match_issues=issues
+        st.session_state.match_shop=match_merchant
+    if st.session_state.get('match_shop')==match_merchant:
+        suggestions=st.session_state.get('match_suggestions',[])
+        if suggestions:
+            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen.')
+            for i,candidate in enumerate(suggestions):
+                with st.container(border=True):
+                    st.markdown(f"**{html.escape(candidate['sku'])} – {html.escape(candidate['product_name'][:90])}**")
+                    st.write(f"Vorschlag: {candidate['title']} · Übereinstimmung {candidate['score']}/100 ({candidate['reason']})")
+                    st.markdown(f"[Shop-Artikel öffnen]({candidate['url']})")
+                    if st.button('✓ Zuordnung bestätigen',key=f'match_confirm_{i}_{candidate["product_id"]}'):
+                        try:
+                            clean=db_store.confirm_match(DB_URL,candidate['product_id'],candidate['merchant'],candidate['url'])
+                            current=st.session_state.products
+                            mask=current['db_id'].astype(str)==candidate['product_id']
+                            current.loc[mask,url_col]=clean
+                            st.session_state.products=current
+                            st.session_state.match_suggestions=[x for x in suggestions if x['product_id']!=candidate['product_id']]
+                            st.success('Zuordnung gespeichert. Preisabfrage kann anschließend gestartet werden.')
+                            st.rerun()
+                        except Exception as exc: st.error(f'Zuordnung fehlgeschlagen: {exc}')
+        elif 'match_suggestions' in st.session_state:
+            st.warning('Keine hinreichend eindeutigen Treffer gefunden. Es wurde nichts zugeordnet.')
+        issues=st.session_state.get('match_issues',[])
+        if issues:
+            with st.expander(f'{len(issues)} Suchhinweise / Fehler'):
+                for issue in issues: st.caption(issue)
 
 st.subheader('Artikelübersicht')
 df=st.session_state.products.copy()
