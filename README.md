@@ -1,11 +1,7 @@
-# LBrixx Amazon Diagnose V9
+# LBrixx Amazon-Diagnose V10
 
-Die Anwendung installiert bei Bedarf den Playwright-Chromium-Browser in der aktiven Python-Umgebung und erstellt einen Screenshot der tatsächlich geladenen Amazon-Seite. Preise werden nicht als bestätigt gespeichert.
+GitHub: `app.py` und `requirements.txt` im Repository-Hauptverzeichnis ersetzen. Nach Streamlit-Neustart den Button klicken.
 
-## Installation
+Diese Version installiert Chromium bei Bedarf, lehnt optionale Cookies ab, soweit eine entsprechende Schaltfläche erkannt wird, und zeigt einen Screenshot sowie sichtbare Preisbereiche. Sie garantiert keine Preiserfassung und verwendet keine Zugangsdaten.
 
-1. `app.py` und `requirements.txt` im Hauptverzeichnis des GitHub-Repositories ersetzen.
-2. In Streamlit Community Cloud die App neu bereitstellen bzw. neu starten.
-3. Auf **Browser-Screenshot und Preisbereiche prüfen** klicken.
-
-Hinweis: Eine Browserinstallation zur Laufzeit ist auf kostenlosem Hosting nicht dauerhaft und kann an fehlenden Systembibliotheken, Netzwerkregeln oder Speicherlimits scheitern. Bei einem Versionswechsel von Playwright wird ein neuer Browser-Download benötigt.
+Hinweis: Browserinstallationen in Streamlit Community Cloud können bei Neustarts verloren gehen. Für dauerhaften Betrieb ist eine reproduzierbare Build-Installation vorzuziehen. Beachte die Nutzungsbedingungen des jeweiligen Anbieters.
