@@ -1,4 +1,4 @@
-import os, re, io, csv, json, base64, hashlib
+import os, re, io, csv, json, base64, hashlib, html
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import pandas as pd
@@ -116,7 +116,7 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich')
+st.title('🧱 LBrixx – Preisvergleich V20')
 st.caption('Brickmo · Einzelartikelvergleich nach Deutschland · Versand 5,49 € je Bestellung · keine Freigrenze')
 if not GH_ENABLED:
     st.warning('Artikel werden derzeit nur lokal in Streamlit gespeichert und können bei Neustart/Neuveröffentlichung verloren gehen. CSV regelmäßig exportieren oder GitHub-Speicherung in Secrets einrichten.')
@@ -151,18 +151,127 @@ with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
 
 st.subheader('Artikelübersicht')
 df=st.session_state.products.copy()
+
+# The Edit link in the first table column selects a row by its current position.
+# All edits are committed through save(), including GitHub persistence.
+edit_param = st.query_params.get('edit', '')
+if edit_param != '':
+    try:
+        edit_index = int(edit_param)
+        if edit_index < 0 or edit_index >= len(df):
+            raise ValueError('Artikel nicht gefunden.')
+    except (ValueError, TypeError):
+        st.warning('Der Bearbeitungslink ist ungültig.')
+        if st.button('Zur Übersicht zurück'):
+            st.query_params.clear()
+            st.rerun()
+    else:
+        current = df.iloc[edit_index]
+        st.markdown(f"#### ✏️ Artikel bearbeiten: {current['sku'] or current['description']}")
+        with st.form(f'edit_product_{edit_index}'):
+            e1, e2 = st.columns(2)
+            with e1:
+                new_sku = st.text_input('Hersteller-SKU', value=str(current['sku']))
+                new_ownsku = st.text_input('LBrixx-Artikelnummer', value=str(current['lbrixx_sku']))
+                new_url = st.text_input('Brickmo-Produktlink', value=str(current['brickmo_url']))
+            with e2:
+                new_desc = st.text_input('Beschreibung', value=str(current['description']))
+                new_price = st.text_input('LBrixx-Verkaufspreis (€)', value=fmt(current['lbrixx_price']).replace(' €','') if euro_num(current['lbrixx_price']) is not None else '')
+            confirm = st.form_submit_button('💾 Änderungen speichern', type='primary')
+        if st.button('Abbrechen'):
+            st.query_params.clear()
+            st.rerun()
+        if confirm:
+            cleaned_sku = new_sku.strip().upper()
+            cleaned_url = new_url.strip()
+            new_price_value = euro_num(new_price)
+            other = df.drop(df.index[edit_index])
+            if not cleaned_sku:
+                st.error('Bitte eine Hersteller-SKU eintragen.')
+            elif not valid_url(cleaned_url):
+                st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse eintragen.')
+            elif new_price.strip() and (new_price_value is None or new_price_value < 0):
+                st.error('Der LBrixx-Preis muss eine gültige, nicht negative Zahl sein.')
+            elif cleaned_sku in other.sku.str.upper().values:
+                st.error('Diese Hersteller-SKU ist bereits vorhanden.')
+            elif cleaned_url in other.brickmo_url.values:
+                st.error('Dieser Brickmo-Link ist bereits vorhanden.')
+            else:
+                updated = df.copy()
+                updated.at[edit_index, 'sku'] = cleaned_sku
+                updated.at[edit_index, 'lbrixx_sku'] = new_ownsku.strip()
+                updated.at[edit_index, 'description'] = new_desc.strip()
+                updated.at[edit_index, 'lbrixx_price'] = f'{new_price_value:.2f}' if new_price.strip() else ''
+                updated.at[edit_index, 'brickmo_url'] = cleaned_url
+                # A changed URL invalidates the old shop price and availability until rechecked.
+                if cleaned_url != str(current['brickmo_url']):
+                    for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'photo'):
+                        updated.at[edit_index, field] = ''
+                try:
+                    save(updated)
+                    st.query_params.clear()
+                    st.success('Artikel dauerhaft gespeichert.')
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f'Änderungen konnten nicht gespeichert werden: {exc}')
 if df.empty: st.info('Noch keine Artikel vorhanden.')
 else:
-    # Use an actual image column; other columns editable through the editor below.
-    display=pd.DataFrame({
-        'Foto':df.photo,'SKU':df.sku,'LBrixx-Nr.':df.lbrixx_sku,'Beschreibung':df.description,
-        'LBrixx-Preis':df.lbrixx_price.map(fmt),'Brickmo-Preis':df.brickmo_price.map(fmt),
-        'Versand':df.shipping.map(fmt),'Gesamtpreis':df.total.map(fmt),
-        'Differenz LBrixx − Brickmo': [fmt(round(euro_num(a)-euro_num(b),2)) if euro_num(a) is not None and euro_num(b) is not None else '–' for a,b in zip(df.lbrixx_price,df.total)],
-        'Verfügbarkeit':df.availability.replace('','Nicht geprüft'),'Stand':df.last_checked,
-        'Brickmo-Link':df.brickmo_url
-    })
-    st.dataframe(display,hide_index=True,use_container_width=True,row_height=76,column_config={'Foto':st.column_config.ImageColumn('Foto',width='small'),'Brickmo-Link':st.column_config.LinkColumn('Brickmo-Link',display_text='Produkt öffnen'),'Beschreibung':st.column_config.TextColumn('Beschreibung',width='large')})
+    # Render clickable, availability-colored Brickmo price cells as safe HTML.
+    # st.dataframe does not reliably combine per-cell background styles with LinkColumn.
+    def cell(v):
+        return html.escape(str(v if v is not None else ''), quote=True)
+
+    def price_cell(row):
+        status=str(row.availability).strip().lower()
+        css_class = 'available' if status=='lieferbar' else 'unavailable' if status=='nicht lieferbar' else 'unknown'
+        price=fmt(row.brickmo_price)
+        url=str(row.brickmo_url).strip()
+        content=cell(price)
+        if valid_url(url):
+            content=f'<a href="{cell(url)}" target="_blank" rel="noopener noreferrer" title="Brickmo-Produkt öffnen">{content} ↗</a>'
+        return f'<td class="brickmo-price {css_class}" title="{cell(row.availability or "Nicht geprüft")}">{content}</td>'
+
+    rows=[]
+    for row_idx, r in df.iterrows():
+        photo=str(r.photo).strip()
+        img=f'<img src="{cell(photo)}" alt="Produktfoto" loading="lazy">' if photo.startswith('https://') else '–'
+        a=euro_num(r.lbrixx_price); b=euro_num(r.total)
+        diff=fmt(round(a-b,2)) if a is not None and b is not None else '–'
+        rows.append('<tr>' +
+            f'<td class="edit"><a href="?edit={row_idx}" target="_self" aria-label="Artikel bearbeiten">✏️ Edit</a></td>' +
+            f'<td class="photo">{img}</td>' +
+            f'<td>{cell(r.sku)}</td>' +
+            f'<td>{cell(r.lbrixx_sku)}</td>' +
+            f'<td class="description">{cell(r.description)}</td>' +
+            f'<td>{cell(fmt(r.lbrixx_price))}</td>' +
+            price_cell(r) +
+            f'<td>{cell(fmt(r.shipping))}</td>' +
+            f'<td>{cell(fmt(r.total))}</td>' +
+            f'<td>{cell(diff)}</td>' +
+            f'<td class="checked">{cell(r.last_checked)}</td>' +
+            '</tr>')
+    table_css = """
+    <style>
+    .lbrixx-scroll {overflow-x:auto; width:100%; border:1px solid rgba(128,128,128,.25); border-radius:10px;}
+    .lbrixx-table {width:100%; border-collapse:collapse; font-size:14px; min-width:1050px;}
+    .lbrixx-table th {text-align:left; font-weight:650; padding:12px 10px; background:rgba(128,128,128,.13); white-space:nowrap;}
+    .lbrixx-table td {padding:10px; border-top:1px solid rgba(128,128,128,.2); vertical-align:middle;}
+    .lbrixx-table tr:hover td:not(.brickmo-price) {background:rgba(128,128,128,.06);}
+    .lbrixx-table .edit a {display:inline-block; padding:7px 9px; border:1px solid rgba(128,128,128,.45); border-radius:7px; white-space:nowrap; text-decoration:none; color:inherit; font-weight:600;}\n    .lbrixx-table .edit a:hover {background:rgba(128,128,128,.16);}\n    .lbrixx-table .photo img {width:65px; height:65px; object-fit:contain; border-radius:5px;}
+    .lbrixx-table .description {min-width:220px;}
+    .lbrixx-table .checked {font-size:12px; white-space:nowrap;}
+    .lbrixx-table .brickmo-price {font-weight:700; white-space:nowrap;}
+    .lbrixx-table .brickmo-price.available {background:#c8f3d2; color:#13532c;}
+    .lbrixx-table .brickmo-price.unknown {background:#fff0ae; color:#704d00;}
+    .lbrixx-table .brickmo-price.unavailable {background:#ffd1d1; color:#7b1e1e;}
+    .lbrixx-table .brickmo-price a {color:inherit; text-decoration:underline; text-underline-offset:3px;}
+    .lbrixx-table .brickmo-price a:hover {text-decoration-thickness:2px;}
+    </style>
+    """
+    headings=['Edit','Foto','SKU','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Stand']
+    table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(f'<th>{cell(h)}</th>' for h in headings)+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
+    st.html(table_html)
+    st.caption('Farben im Brickmo-Preisfeld: 🟢 lieferbar · 🟡 unbestätigt · 🔴 nicht lieferbar. Preis anklicken, um das Produkt bei Brickmo zu öffnen.')
     c1,c2,c3=st.columns([1,1,2])
     with c1: update=st.button('🔄 Alle Preise aktualisieren',type='primary',use_container_width=True)
     with c2: st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv',use_container_width=True)
@@ -190,12 +299,16 @@ else:
             elif any(not valid_url(u) for u in edited.brickmo_url): st.error('Ungültiger Brickmo-Link.')
             elif any(x and euro_num(x) is None for x in edited.lbrixx_price): st.error('LBrixx-Preis muss eine Zahl sein.')
             else:
-                lookup={r.brickmo_url:r for _,r in df.iterrows()}
                 rows=[]
-                for _,r in edited.iterrows():
-                    original=lookup.get(r.brickmo_url)
+                for pos, (_,r) in enumerate(edited.iterrows()):
+                    original=df.iloc[pos] if pos < len(df) else None
                     item=original.to_dict() if original is not None else {c:'' for c in COLUMNS}
-                    item.update(r.to_dict()); rows.append(item)
+                    old_url=item.get('brickmo_url','')
+                    item.update(r.to_dict())
+                    if old_url != item['brickmo_url']:
+                        for field in ('brickmo_price','shipping','total','availability','last_checked','error','photo'):
+                            item[field]=''
+                    rows.append(item)
                 try: save(pd.DataFrame(rows)); st.success('Gespeichert.'); st.rerun()
                 except Exception as e: st.error(f'Speichern fehlgeschlagen: {e}')
 

@@ -1,18 +1,21 @@
-LBrixx Price-Crawler V18
-=======================
-1. app.py und requirements.txt im GitHub-Repository lbrixx-pricecrawler ersetzen.
-2. Streamlit neu starten lassen.
-3. Artikel im Formular hinzufügen oder CSV importieren.
-4. Für dauerhafte Speicherung Streamlit App settings > Secrets konfigurieren:
-   GITHUB_REPO = "BENUTZERNAME/lbrixx-pricecrawler"
-   GITHUB_TOKEN = "github_pat_..."
-   GITHUB_DATA_PATH = "data/lbrixx_products.csv"
-   Das Token muss Fine-grained sein und nur Contents: Read and write für dieses Repo erlauben.
-   Keine Secrets in GitHub-Dateien oder im Chat veröffentlichen.
-5. Ohne GitHub-Token werden Daten lokal gespeichert und können bei Streamlit-Neustarts verloren gehen.
-6. CSV-Export zur Sicherung verwenden.
+LBrixx Price-Crawler V20
 
-Hinweise: Versandkosten 5,49 EUR gelten für eine einzelne Brickmo-Bestellung nach DE.
-Nur ausdrücklich als lieferbar erkannte Artikel gelten als kaufbar.
-Die App ruft nur vom Nutzer angegebene Brickmo-URLs ab.
-Bei Änderungen der Shop-Struktur muss der Parser angepasst werden.
+NEU:
+- 'Edit' als erste Spalte jeder Tabellenzeile.
+- Klick öffnet ein Bearbeitungsformular für SKU, LBrixx-Nr., Beschreibung,
+  LBrixx-Verkaufspreis und Brickmo-Produktlink.
+- Speichern erfolgt über dieselbe GitHub-CSV-Speicherfunktion wie in V19.
+- Bei geänderter Brickmo-URL werden alte Händlerpreise zurückgesetzt.
+  Danach 'Alle Preise aktualisieren' verwenden.
+- Grün/gelb/rot hinterlegte Brickmo-Preiszellen bleiben anklickbar.
+
+INSTALLATION:
+1. V19 zuerst als CSV exportieren (Sicherung).
+2. app.py und requirements.txt in GitHub aktualisieren.
+3. Streamlit lädt V20 automatisch neu.
+4. Testweise einen Artikel über 'Edit' ändern und danach
+   data/lbrixx_products.csv in GitHub kontrollieren.
+
+Die GitHub-Secrets bleiben unverändert.
+Bestehende Artikel werden nicht absichtlich gelöscht oder überschrieben.
+Die CSV-Struktur ist identisch mit V19.
