@@ -63,7 +63,8 @@ def save(url,df):
             val=lambda k: str(d.get(k,'') or '').strip()
             pid=int(val('db_id')) if val('db_id').isdigit() else None
             image=val('photo')
-            if image.startswith('data:'): image='' # Never store base64 thumbnails in SQL.
+            # Persist small 128px thumbnails as data URIs in image_url.
+            # This avoids a separate Supabase Storage configuration.
             params=(val('sku') or None,val('ean') or None,val('description') or 'Unbenannter Artikel',image or None,val('hidden') in ('1','True','true'),val('deleted') in ('1','True','true'))
             if pid:
                 cur.execute('''UPDATE public.products SET manufacturer_sku=%s,ean=%s,name=%s,image_url=COALESCE(%s,image_url),is_hidden=%s,is_deleted=%s,updated_at=now() WHERE id=%s RETURNING id''',(*params,pid))

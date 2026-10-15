@@ -28,3 +28,5 @@ Noch NICHT enthalten:
 Wichtig: Die SQL-Struktur muss wie zuvor angelegt sein. Das Datenbankschema
 hat UNIQUE(product_id,merchant_id); pro Produkt/Händler ist ein Angebot möglich.
 Es werden keine Zugangsdaten im Code gespeichert.
+
+BILDER-FIX: Odoo image_128 wird beim Import abgerufen und als kleines Vorschaubild in products.image_url gespeichert. Bereits importierte Artikel mit derselben Importauswahl erneut importieren. Kein neues SQL/Secret erforderlich.

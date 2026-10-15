@@ -175,7 +175,7 @@ def odoo_read(limit=5, offset=0):
         raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
     endpoint=ODOO_URL+'/json/2/product.product/search_read'
     headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
-    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','barcode'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','barcode','image_128'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
     response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
     if not response.ok:
         raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
@@ -204,7 +204,7 @@ def odoo_merge(existing, products):
             skipped+=1; continue
         name=str(product.get('name') or '')
         price=euro_num(product.get('list_price'))
-        raw_image=None # Produktbilder nicht als Base64 in SQL speichern
+        raw_image=product.get('image_128') # Kleines Odoo-Vorschaubild (128 px)
         # Odoo image_128 is a base64-encoded thumbnail (or False).
         # Keep the old Odoo image if Odoo has no image for this product.
         odoo_photo=''
