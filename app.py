@@ -184,7 +184,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.9 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.9.2 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -470,7 +470,13 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
             for i, candidate in enumerate(comparison):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")
-                    st.caption(f"Brickmo: {candidate['Brickmo-Produkt']} · Quelle: {candidate['Quelle']} · Bitte Hersteller und SKU vor Bestätigung vergleichen.")
+                    st.markdown(
+                        '<div style="font-size:17px;font-weight:600;color:#111111;line-height:1.45;">'
+                        f"Brickmo: {html.escape(str(candidate['Brickmo-Produkt']))}"
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f"Quelle: {candidate['Quelle']} · Bitte Hersteller und SKU vor Bestätigung vergleichen.")
                     st.markdown(f"[Brickmo-Produkt prüfen]({candidate['Brickmo-Link']})")
                     if st.button('✓ Zuordnung bestätigen', key=f'category_confirm_{candidate["db_id"]}_{i}'):
                         try:
