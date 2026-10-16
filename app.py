@@ -487,8 +487,8 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.26)', expanded=False):
-    st.caption('Indexiert Shopify-Produktliste und zusätzlich Produktlinks der Kategorieseiten. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.27)', expanded=False):
+    st.caption('Indexiert Shopify-Produktliste und HTML-Kategorieseiten; Pantasy ohne Varianten-SKU wird bei übereinstimmender Artikelnummer in Titel und URL erkannt. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
     if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
         try:
             with st.spinner('Lootstore-Katalog wird eingelesen…'):
@@ -505,6 +505,16 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.26)', expande
             for note in loot_report['notes']:
                 st.caption(note)
             st.write('Beispiel-SKUs:', ', '.join(loot_report['sample_skus']) or 'Keine')
+    with st.expander('➕ Einzelnen Lootstore-Produktlink indexieren', expanded=False):
+        st.caption('Für Produkte, die nicht in der Kategorie erscheinen. Prüft Hersteller und Artikelnummer; erstellt keine automatische LBrixx-Zuordnung.')
+        single_url = st.text_input('Lootstore-Produktlink', value='https://lootstore.de/products/pantasy-steampunk-die-nautilus-85029-klemmbausteinset', key='lootstore_single_index_url')
+        if st.button('Produkt prüfen und in Lootstore-Index speichern', key='lootstore_single_index_button'):
+            try:
+                result = lootstore_index.index_product_url(DB_URL, single_url)
+                st.success(f"Gespeichert: {result['brand']} {result['sku']} – {result['title']} (Quelle: {result['source']}).")
+                st.session_state.lootstore_comparison = None
+            except Exception as exc:
+                st.error(f'Produkt konnte nicht indexiert werden: {exc}')
     with st.expander('🔎 Lootstore-SKU-Einzeldiagnose (Pantasy)', expanded=False):
         st.caption('Prüft Index, Shopify-Suche, HTML-Suche und optional einen direkten Produktlink. Keine automatische Zuordnung oder Datenbankänderung.')
         diagnostic_sku = st.text_input('Pantasy-Artikelnummer', value='85029', key='lootstore_diagnostic_sku')
@@ -524,7 +534,7 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.26)', expande
                 st.write(f"Index: {entry['manufacturer_sku']} · {entry['brand_name']} · {entry['product_title']}")
                 st.markdown(f"[Produkt öffnen]({entry['product_url']})")
             for entry in result['live']:
-                st.write(f"Live: {', '.join(entry['skus'])} · {entry['brand']} · {entry['title']}")
+                st.write(f"Live: {', '.join(entry['skus']) or result['sku']} · {entry['brand']} · {entry['title']} · Quelle: {entry.get('source', 'Varianten-SKU')}")
                 if not entry['pantasy']:
                     st.warning('Hersteller im Shopify-Produktdatensatz ist nicht Pantasy – kein automatischer Abgleich.')
                 st.markdown(f"[Produkt öffnen]({entry['url']})")
@@ -533,7 +543,7 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.26)', expande
                 st.markdown(f"[Produkt öffnen]({entry['url']})")
             st.caption(f"{result.get('checked_handles', 0)} Produktlinks bei der Live-Diagnose geprüft.")
             if not result['live']:
-                st.info('Kein bestätigter Live-SKU-Treffer. Das bedeutet nicht zwingend, dass die Produktseite nicht existiert.')
+                st.info('Kein eindeutiger Live-Treffer über Varianten-SKU oder Pantasy-Titel und URL.')
             for err in result['errors']:
                 st.caption('Abrufhinweis: ' + err)
     if st.button('Pantasy mit LBrixx abgleichen', key='lootstore_pantasy_compare'):

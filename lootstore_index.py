@@ -41,6 +41,34 @@ def _product_handles_from_html(html_text):
     return handles
 
 
+def _title_url_sku(item):
+    """Conservative Pantasy fallback: vendor + exact five-digit model in title and URL.
+
+    Never infer a SKU when variants disagree or multiple model numbers occur.
+    """
+    if brand(item.get('brand')) != 'pantasy' or item.get('skus'):
+        return None
+    title = str(item.get('title') or '')
+    path = urlparse(str(item.get('url') or '')).path.lower()
+    title_numbers = set(re.findall(r'(?<!\d)\d{5}(?!\d)', title))
+    url_numbers = set(re.findall(r'(?<!\d)\d{5}(?!\d)', path))
+    common = title_numbers & url_numbers
+    return next(iter(common)) if len(common) == 1 and len(title_numbers) == 1 else None
+
+
+def _record_for_item(item):
+    if not item or not item.get('brand'):
+        return None, None
+    skus = item.get('skus') or []
+    if len(skus) == 1:
+        sku = skus[0]
+        return (item['url'], sku, item['title'], item['brand'], COLLECTION), 'variant'
+    if not skus:
+        sku = _title_url_sku(item)
+        if sku:
+            return (item['url'], sku, item['title'], item['brand'], COLLECTION), 'title_url'
+    return None, None
+
 def _fetch_product(session, handle, timeout=20):
     """Read canonical Shopify product JSON and return unambiguous SKU data."""
     if not re.fullmatch(r'[a-zA-Z0-9_-]+', handle):
@@ -75,7 +103,7 @@ def _html_collection_handles(session, max_pages, timeout, notes):
     return found
 
 def index_collection(db_url, max_pages=10, timeout=20):
-    """Fetch collection-scoped Shopify JSON; only SKU-bearing variants are indexed."""
+    """Fetch Shopify catalog; allow verified Pantasy title+URL fallback."""
     session = requests.Session()
     session.headers.update(HEADERS)
     records = {}
@@ -84,6 +112,7 @@ def index_collection(db_url, max_pages=10, timeout=20):
     complete = False
     product_count = 0
     json_handles = set()
+    fallback_count = 0
     cap = min(max(1, int(max_pages)), 25)
     for page in range(1, cap+1):
         url = f'{COLLECTION}/products.json?limit=250&page={page}'
@@ -113,11 +142,17 @@ def index_collection(db_url, max_pages=10, timeout=20):
                 vendor = str(product.get('vendor') or '').strip()
                 if not vendor:
                     continue  # Unknown manufacturer must never create a match.
-                for variant in product.get('variants') or []:
-                    sku = norm(variant.get('sku'))
-                    if not sku or len(sku) < 3:
-                        continue
-                    records[(product_url, sku)] = (product_url, sku, title, vendor, COLLECTION)
+                item = {'url': product_url, 'title': title, 'brand': vendor,
+                        'skus': sorted({norm(v.get('sku')) for v in (product.get('variants') or [])
+                                        if norm(v.get('sku'))})}
+                row, source = _record_for_item(item)
+                if row:
+                    records[(product_url, row[1])] = row
+                    if source == 'title_url':
+                        fallback_count += 1
+                elif len(item['skus']) > 1:
+                    for sku in item['skus']:
+                        records[(product_url, sku)] = (product_url, sku, title, vendor, COLLECTION)
             notes.append(f'Seite {page}: {len(products)} Produkte, {len(records)} eindeutige SKU-Varianten.')
             if len(products) < 250:
                 complete = True
@@ -134,15 +169,18 @@ def index_collection(db_url, max_pages=10, timeout=20):
     for handle in missing_handles:
         try:
             item = _fetch_product(session, handle, timeout)
-            if not item or not item['brand'] or len(item['skus']) != 1:
-                notes.append(f'HTML-Produkt {handle}: fehlender Hersteller oder mehrdeutige SKU.')
+            row, source = _record_for_item(item)
+            if not row:
+                notes.append(f'HTML-Produkt {handle}: keine eindeutig bestätigbare Artikelnummer.')
                 continue
-            sku = item['skus'][0]
-            records[(item['url'], sku)] = (item['url'], sku, item['title'], item['brand'], COLLECTION)
+            records[(item['url'], row[1])] = row
             html_added += 1
+            if source == 'title_url':
+                fallback_count += 1
         except (requests.RequestException, ValueError) as exc:
             notes.append(f'HTML-Produkt {handle}: {type(exc).__name__}: {str(exc)[:120]}')
-    notes.append(f'HTML-Ergänzung: {html_added} zusätzliche Produkte mit eindeutiger SKU.')
+    notes.append(f'HTML-Ergänzung: {html_added} zusätzliche Produkte mit eindeutiger Artikelnummer.')
+    notes.append(f'Pantasy-Titel/URL-Fallback: {fallback_count} Produkte erkannt.')
     saved = 0
     if records:
         # A single URL may have multiple variants. Store the first variant only
@@ -170,7 +208,32 @@ def index_collection(db_url, max_pages=10, timeout=20):
                         source_collection=excluded.source_collection, indexed_at=now()''', list(by_url.values()))
             saved = len(by_url)
     return {'saved':saved, 'pages_checked':checked, 'products_seen':product_count,
-            'complete':complete, 'html_added':html_added, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
+            'complete':complete, 'html_added':html_added, 'fallback_count':fallback_count, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
+
+def index_product_url(db_url, product_url, timeout=20):
+    """Index one user-supplied Lootstore URL after verifying its vendor and SKU."""
+    parsed = urlparse(str(product_url).strip())
+    if parsed.scheme != 'https' or parsed.hostname not in ('lootstore.de', 'www.lootstore.de'):
+        raise ValueError('Nur HTTPS-Produktlinks von lootstore.de sind erlaubt.')
+    match = re.fullmatch(r'/products/([a-zA-Z0-9_-]+)/?', parsed.path)
+    if not match:
+        raise ValueError('Bitte einen gültigen Lootstore-Produktlink eingeben.')
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    item = _fetch_product(session, match.group(1), timeout)
+    row, source = _record_for_item(item)
+    if not row:
+        raise ValueError('Keine eindeutige Artikelnummer: Hersteller, SKU oder Titel/URL prüfen.')
+    with psycopg.connect(db_url, connect_timeout=12) as conn:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA)
+            cur.execute("""INSERT INTO public.lootstore_catalog
+                (product_url,manufacturer_sku,product_title,brand_name,source_collection,indexed_at)
+                VALUES (%s,%s,%s,%s,%s,now()) ON CONFLICT (product_url) DO UPDATE SET
+                manufacturer_sku=excluded.manufacturer_sku,
+                product_title=excluded.product_title, brand_name=excluded.brand_name,
+                source_collection=excluded.source_collection, indexed_at=now()""", row)
+    return {'sku':row[1], 'title':row[2], 'brand':row[3], 'source':source, 'url':row[0]}
 
 def match_key(s):
     key = norm(s)
@@ -260,7 +323,8 @@ def diagnose_sku(db_url, sku, timeout=18, product_url=''):
             if not item:
                 continue
             item['pantasy'] = brand(item['brand']) == 'pantasy'
-            if any(match_key(s) == key for s in item['skus']):
+            if any(match_key(s) == key for s in item['skus']) or _title_url_sku(item) == key:
+                item['source'] = 'Varianten-SKU' if any(match_key(s) == key for s in item['skus']) else 'Pantasy: Titel und URL'
                 live.append(item)
             elif re.search(r'(?<![0-9])' + re.escape(key) + r'(?![0-9])', item['title'], re.I):
                 item['reason'] = 'Artikelnummer nur im Titel, nicht in der Shopify-Varianten-SKU bestätigt'
