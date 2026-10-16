@@ -488,9 +488,9 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.28)', expanded=False):
-    st.caption('Indexiert Shopify-Produktliste, HTML-Kategorieseiten und Produktsitemaps; Pantasy ohne Varianten-SKU wird bei übereinstimmender Artikelnummer in Titel und URL erkannt. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
-    if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.29)', expanded=False):
+    st.caption('Schonende Pantasy-Indexierung über die Lootstore-Produktsitemap: höchstens 20 Produktprüfungen je Durchlauf, mindestens 2 Sekunden Abstand und sofortiger Stopp bei HTTP 429. Fortschritt wird in PostgreSQL gespeichert. Keine automatische Zuordnung.')
+    if st.button('Pantasy-Sitemap: nächste 20 Produkte prüfen', key='lootstore_collection_index'):
         try:
             with st.spinner('Lootstore-Katalog wird eingelesen…'):
                 st.session_state.lootstore_index_report = lootstore_index.index_collection(DB_URL)
@@ -499,9 +499,9 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.28)', expande
             st.error(f'Lootstore-Indexierung fehlgeschlagen: {exc}')
     loot_report = st.session_state.get('lootstore_index_report')
     if loot_report:
-        st.write(f"{loot_report['pages_checked']} Seiten geprüft · {loot_report['products_seen']} Produkte gesehen · {loot_report['saved']} SKU-Links gespeichert · {loot_report.get('sitemap_added', 0)} Sitemap-Ergänzungen")
+        st.write(f"{loot_report.get('checked', 0)} Produkte geprüft · {loot_report['saved']} Pantasy-Links gespeichert · {loot_report.get('remaining', 0)} Kandidaten offen")
         if not loot_report['complete']:
-            st.warning('Die Indexierung wurde nicht vollständig abgeschlossen. Diagnose prüfen.')
+            st.warning('Durchlauf unterbrochen oder weitere Kandidaten vorhanden. Diagnose prüfen; bei HTTP 429 bitte später erneut versuchen.')
         with st.expander('Lootstore-Indexdiagnose'):
             for note in loot_report['notes']:
                 st.caption(note)

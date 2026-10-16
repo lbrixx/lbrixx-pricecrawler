@@ -141,130 +141,98 @@ def _sitemap_product_handles(session, timeout, notes, max_sitemaps=30, max_handl
         notes.append('Sitemap-Sicherheitslimit erreicht; Index möglicherweise unvollständig.')
     return handles
 
-def index_collection(db_url, max_pages=10, timeout=20):
-    """Fetch Shopify catalog; allow verified Pantasy title+URL fallback."""
+PROGRESS_SCHEMA = '''CREATE TABLE IF NOT EXISTS public.lootstore_index_progress (
+    product_handle text PRIMARY KEY,
+    status text NOT NULL,
+    checked_at timestamptz NOT NULL DEFAULT now()
+);'''
+
+
+def index_collection(db_url, max_pages=10, timeout=20, batch_limit=20, delay_seconds=2):
+    # Resume a polite, Pantasy-only sitemap crawl. Never retry already checked handles.
+
+    # HTTP 429 ends the run immediately; successfully processed handles are committed.
+    # Existing catalog rows are preserved, including manually indexed items.
     session = requests.Session()
     session.headers.update(HEADERS)
-    records = {}
     notes = []
-    checked = 0
-    complete = False
-    product_count = 0
-    json_handles = set()
-    fallback_count = 0
-    cap = min(max(1, int(max_pages)), 25)
-    for page in range(1, cap+1):
-        url = f'{COLLECTION}/products.json?limit=250&page={page}'
-        try:
-            response = session.get(url, timeout=timeout)
-            if response.status_code == 429:
-                notes.append(f'Seite {page}: HTTP 429 – bitte später erneut versuchen.')
-                break
-            response.raise_for_status()
-            products = response.json().get('products')
-            if not isinstance(products, list):
-                notes.append(f'Seite {page}: keine Shopify-Produktliste im JSON.')
-                break
-            checked += 1
-            if not products:
-                complete = True
-                notes.append(f'Seite {page}: keine weiteren Produkte.')
-                break
-            product_count += len(products)
-            for product in products:
-                handle = str(product.get('handle') or '').strip()
-                if not re.fullmatch(r'[a-zA-Z0-9_-]+', handle):
-                    continue
-                json_handles.add(handle)
-                product_url = 'https://lootstore.de/products/' + handle
-                title = str(product.get('title') or handle).strip()
-                vendor = str(product.get('vendor') or '').strip()
-                if not vendor:
-                    continue  # Unknown manufacturer must never create a match.
-                item = {'url': product_url, 'title': title, 'brand': vendor,
-                        'skus': sorted({norm(v.get('sku')) for v in (product.get('variants') or [])
-                                        if norm(v.get('sku'))})}
-                row, source = _record_for_item(item)
-                if row:
-                    records[(product_url, row[1])] = row
-                    if source == 'title_url':
-                        fallback_count += 1
-                elif len(item['skus']) > 1:
-                    for sku in item['skus']:
-                        records[(product_url, sku)] = (product_url, sku, title, vendor, COLLECTION)
-            notes.append(f'Seite {page}: {len(products)} Produkte, {len(records)} eindeutige SKU-Varianten.')
-            if len(products) < 250:
-                complete = True
-                break
-            time.sleep(0.25)
-        except (requests.RequestException, ValueError) as exc:
-            notes.append(f'Seite {page}: {type(exc).__name__}: {str(exc)[:140]}')
-            break
-    # A second discovery path: collection HTML cards may contain products absent
-    # from Shopify's collection-scoped products.json (e.g. sold-out items).
-    html_handles = _html_collection_handles(session, cap, timeout, notes)
-    missing_handles = sorted(html_handles - json_handles)
-    html_added = 0
-    for handle in missing_handles:
-        try:
-            item = _fetch_product(session, handle, timeout)
-            row, source = _record_for_item(item)
-            if not row:
-                notes.append(f'HTML-Produkt {handle}: keine eindeutig bestätigbare Artikelnummer.')
-                continue
-            records[(item['url'], row[1])] = row
-            html_added += 1
-            if source == 'title_url':
-                fallback_count += 1
-        except (requests.RequestException, ValueError) as exc:
-            notes.append(f'HTML-Produkt {handle}: {type(exc).__name__}: {str(exc)[:120]}')
-    notes.append(f'HTML-Ergänzung: {html_added} zusätzliche Produkte mit eindeutiger Artikelnummer.')
-    sitemap_handles = _sitemap_product_handles(session, timeout, notes)
-    sitemap_missing = sorted(sitemap_handles - json_handles - html_handles)
-    sitemap_added = 0
-    for handle in sitemap_missing:
-        try:
-            item = _fetch_product(session, handle, timeout)
-            row, source = _record_for_item(item)
-            if not row:
-                continue
-            records[(item['url'], row[1])] = row
-            sitemap_added += 1
-            if source == 'title_url':
-                fallback_count += 1
-        except (requests.RequestException, ValueError) as exc:
-            notes.append(f'Sitemap-Produkt {handle}: {type(exc).__name__}: {str(exc)[:100]}')
-    notes.append(f'Sitemap-Ergänzung: {sitemap_added} weitere Produkte mit eindeutiger Artikelnummer.')
-
-    notes.append(f'Pantasy-Titel/URL-Fallback: {fallback_count} Produkte erkannt.')
     saved = 0
-    if records:
-        # A single URL may have multiple variants. Store the first variant only
-        # when SKU is unambiguous; ambiguous multi-SKU products need manual review.
-        by_url = {}
-        ambiguous = set()
-        for row in records.values():
-            if row[0] in by_url and by_url[row[0]][1] != row[1]:
-                ambiguous.add(row[0])
+    checked = 0
+    fallback_count = 0
+    limited = False
+    batch_limit = min(max(int(batch_limit), 1), 20)
+    delay_seconds = max(float(delay_seconds), 2.0)
+
+    with psycopg.connect(db_url, connect_timeout=12) as conn:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA)
+            cur.execute(PROGRESS_SCHEMA)
+            # Already indexed products must not be requested again.
+            cur.execute("SELECT product_url FROM public.lootstore_catalog WHERE lower(brand_name) = 'pantasy'")
+            existing = {urlparse(row[0]).path.rstrip('/').split('/')[-1] for row in cur.fetchall()}
+            cur.execute('SELECT product_handle FROM public.lootstore_index_progress')
+            completed = {row[0] for row in cur.fetchall()}
+        conn.commit()
+
+        try:
+            sitemap_handles = _sitemap_product_handles(session, timeout, notes)
+        except requests.RequestException as exc:
+            notes.append(f'Sitemap konnte nicht gelesen werden: {exc}')
+            sitemap_handles = set()
+        # The product slug is a discovery hint only. Manufacturer is verified from Shopify JSON.
+        pantasy_handles = sorted(h for h in sitemap_handles if 'pantasy' in h.casefold())
+        pending = [h for h in pantasy_handles if h not in existing and h not in completed]
+        notes.append(f'Pantasy-Kandidaten aus Sitemap: {len(pantasy_handles)} · bereits indexiert: {len(existing & set(pantasy_handles))} · früher geprüft: {len(completed & set(pantasy_handles))} · offen: {len(pending)}.')
+        sample_skus = []
+        for handle in pending[:batch_limit]:
+            # Wait BEFORE each request, not after, to avoid bursts on reruns.
+            time.sleep(delay_seconds)
+            try:
+                item = _fetch_product(session, handle, timeout)
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is not None and response.status_code == 429:
+                    retry_after = response.headers.get('Retry-After', '')
+                    notes.append('HTTP 429: sofort gestoppt.' + (f' Retry-After: {retry_after}' if retry_after else ' Bitte später fortsetzen.'))
+                    limited = True
+                    break
+                notes.append(f'Produkt {handle}: HTTP-Fehler {response.status_code if response is not None else "unbekannt"}; nicht als geprüft markiert.')
+                break
+            except (requests.RequestException, ValueError) as exc:
+                notes.append(f'Produkt {handle}: {type(exc).__name__}; Lauf angehalten, später erneut versuchen.')
+                break
+
+            if brand(item.get('brand')) != 'pantasy':
+                row, source = None, None
+                status = 'other_brand'
             else:
-                by_url[row[0]] = row
-        for url in ambiguous:
-            by_url.pop(url, None)
-        if ambiguous:
-            notes.append(f'{len(ambiguous)} Produkte mit mehreren SKUs übersprungen (manuelle Prüfung).')
-        if by_url:
-            with psycopg.connect(db_url, connect_timeout=12) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(SCHEMA)
-                    cur.executemany('''INSERT INTO public.lootstore_catalog
+                row, source = _record_for_item(item)
+                status = 'indexed' if row else 'no_unique_sku'
+            with conn.cursor() as cur:
+                if row:
+                    cur.execute('''INSERT INTO public.lootstore_catalog
                         (product_url,manufacturer_sku,product_title,brand_name,source_collection,indexed_at)
                         VALUES (%s,%s,%s,%s,%s,now()) ON CONFLICT (product_url) DO UPDATE SET
                         manufacturer_sku=excluded.manufacturer_sku,
-                        product_title=excluded.product_title, brand_name=excluded.brand_name,
-                        source_collection=excluded.source_collection, indexed_at=now()''', list(by_url.values()))
-            saved = len(by_url)
-    return {'saved':saved, 'pages_checked':checked, 'products_seen':product_count,
-            'complete':complete, 'html_added':html_added, 'sitemap_added':sitemap_added, 'fallback_count':fallback_count, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
+                        product_title=excluded.product_title,brand_name=excluded.brand_name,
+                        source_collection=excluded.source_collection,indexed_at=now()''', row)
+                    saved += 1
+                    sample_skus.append(row[1])
+                    fallback_count += (source == 'title_url')
+                cur.execute('''INSERT INTO public.lootstore_index_progress (product_handle,status,checked_at)
+                    VALUES (%s,%s,now()) ON CONFLICT (product_handle) DO UPDATE SET
+                    status=excluded.status,checked_at=now()''', (handle, status))
+            conn.commit()
+            checked += 1
+        remaining = max(0, len(pending) - checked)
+        notes.append(f'Dieser Durchlauf: {checked} Produktprüfungen, {saved} Pantasy-Links gespeichert, {fallback_count} Titel/URL-Erkennungen. Noch {remaining} Kandidaten offen.')
+        if not limited and remaining:
+            notes.append('Fortsetzung: Schaltfläche erneut anklicken. Bereits geprüfte Artikel werden übersprungen.')
+        return {'saved':saved, 'pages_checked':0, 'products_seen':checked,
+                'complete':not limited and remaining == 0 and bool(sitemap_handles),
+                'html_added':0, 'sitemap_added':saved, 'fallback_count':fallback_count,
+                'notes':notes, 'sample_skus':sample_skus, 'remaining':remaining,
+                'rate_limited':limited, 'checked':checked}
 
 def index_product_url(db_url, product_url, timeout=20):
     """Index one user-supplied Lootstore URL after verifying its vendor and SKU."""
