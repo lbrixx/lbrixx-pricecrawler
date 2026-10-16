@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.32 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.33 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -972,18 +972,27 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             suggestions=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip(): continue
-                key=lumibricks_store.sku_key(product.sku)
-                hit=catalog.get(key)
-                if hit: suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+                # Use primary SKU and explicit manufacturer codes in description.
+                keys = []
+                for candidate in brickmo_match_keys(product):
+                    normalized = lumibricks_store.sku_key(candidate)
+                    if normalized and normalized not in keys:
+                        keys.append(normalized)
+                for key in keys:
+                    hit = catalog.get(key)
+                    if hit:
+                        suggestions.append((str(product.db_id), str(product.sku),
+                                            hit['url'], hit['title'], key))
+                        break
             st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)
         suggestions=st.session_state.get('lumi_suggestions',[])
         if suggestions:
             st.caption('Direkter SKU-Abgleich: LBrixx-Artikel → passender Lumibricks-Artikel. Jeden Treffer direkt bestätigen:')
-            for pid,sku,url,title in suggestions[:100]:
+            for pid,sku,url,title,matched_sku in suggestions[:100]:
                 a,b=st.columns([5,1])
-                with a: st.markdown(f'**LBrixx {sku}** → **Lumibricks {sku}** · {title[:75]} · [Produkt ansehen]({url})')
+                with a: st.markdown(f'**LBrixx {sku}** → **Lumibricks {matched_sku}** · {title[:75]} · [Produkt ansehen]({url})')
                 with b:
                     if st.button('✓ Zuordnen',key=f'lumi_confirm_{pid}'):
                         try:
