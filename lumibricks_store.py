@@ -76,65 +76,32 @@ def confirm(url,pid,product_url):
           DO UPDATE SET product_url=excluded.product_url,is_active=true,match_status='confirmed'""",(int(pid),mid,clean))
     return clean
 
-def catalog(limit_pages=20):
-    """Search Shopify catalog by variant SKU and explicit F/L/LB product codes.
-
-    Read pages gently, stop on rate limiting or repeated product batches.
-    No database writes and no automatic assignment.
-    """
-    result = {}
-    seen = set()
-    diagnostics = []
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    pages = 0
-    for page in range(1, limit_pages + 1):
+def catalog(limit_pages=4):
+    """Public Shopify catalog; returns SKU-indexed candidates, no DB writes."""
+    result={}; seen=set(); diagnostics=[]
+    session=requests.Session();session.headers.update(HEADERS)
+    for page in range(1,limit_pages+1):
         try:
-            r = session.get(BASE + '/products.json',
-                            params={'limit': 100, 'page': page}, timeout=25)
-            if r.status_code == 429:
-                diagnostics.append('HTTP 429: Suche beendet; bitte später erneut versuchen')
-                break
+            r=session.get(BASE+'/products.json',params={'limit':100,'page':page},timeout=25)
+            if r.status_code==429:
+                diagnostics.append('HTTP 429: Suche beendet');break
             r.raise_for_status()
-            products = r.json().get('products', [])
-        except Exception as exc:
-            diagnostics.append(f'Seite {page}: {exc}')
-            break
-        if not products:
-            break
-        pages += 1
-        newly_seen = 0
+            products=r.json().get('products',[])
+        except Exception as e:
+            diagnostics.append(f'Seite {page}: {e}');break
+        if not products: break
         for product in products:
-            handle = str(product.get('handle') or '')
-            if not handle or handle in seen:
-                continue
+            handle=product.get('handle','')
+            if not handle or handle in seen: continue
             seen.add(handle)
-            newly_seen += 1
-            title = str(product.get('title') or '')
-            url = BASE + '/de/products/' + handle
-            # Prefer Shopify variant SKUs; use title/handle only for an
-            # unambiguous manufacturer-style code (not generic numbers).
-            keys = []
-            for variant in product.get('variants') or []:
-                raw = variant.get('sku')
-                if raw:
-                    keys.append((sku_key(raw), 'Varianten-SKU'))
-            for raw in re.findall(r'(?<![A-Za-z0-9])(?:LB|L|F)\s*[-_]?\s*\d{3,7}(?![A-Za-z0-9])',
-                                  title + ' ' + handle, flags=re.I):
-                keys.append((sku_key(raw), 'Titel/URL'))
-            for key, origin in keys:
-                if key:
-                    result.setdefault(key, {'url': url, 'title': title,
-                                            'sku': key, 'source': origin})
-        if not newly_seen:
-            diagnostics.append('Wiederholte Katalogseite erkannt; Suche beendet')
-            break
-        if page < limit_pages:
-            time.sleep(2)
-    diagnostics.append(f'{pages} Katalogseiten · {len(seen)} Produkte · {len(result)} SKU-Schlüssel')
-    if pages == limit_pages and products:
-        diagnostics.append('Seitenlimit erreicht; Katalog möglicherweise nicht vollständig')
-    return result, diagnostics, len(seen)
+            variants=product.get('variants') or []
+            for v in variants:
+                key=sku_key(v.get('sku'))
+                if not key: continue
+                entry={'url':BASE+'/de/products/'+handle,'title':product.get('title',''),'sku':v.get('sku','')}
+                result.setdefault(key,entry)
+        if page<limit_pages: time.sleep(2)
+    return result,diagnostics,len(seen)
 
 def parse_eur(url):
     """Only accept explicit EUR price in structured data. Never interpret USD as EUR."""
@@ -190,116 +157,22 @@ def record(url,pid,product_url):
     return price
 
 
-def targeted_sku_search(sku, max_product_checks=6):
-    """Look for a specific manufacturer SKU in public Shopify search results.
+def is_valid_product_url(product_url):
+    """Validate an exact Lumibricks product URL, without making network requests."""
+    from urllib.parse import urlparse
+    p=urlparse(str(product_url).strip())
+    return (p.scheme=='https' and p.hostname in ('lumibricks.com','www.lumibricks.com')
+            and '/products/' in p.path and bool(p.path.split('/products/',1)[1].strip('/')))
 
-    This is deliberately conservative: a result must explicitly contain the
-    exact code in its variant SKU, product title, or handle. No DB writes.
-    """
-    from urllib.parse import urljoin
-    code = sku_key(sku)
-    if not re.fullmatch(r'(?:F|L|LB)?[A-Z0-9]{4,12}', code):
-        return None, ['Ungültige oder zu allgemeine Herstellerartikelnummer.']
-    diagnostics = []
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    handles = []
-    def add(handle):
-        handle = str(handle or '').strip().split('?')[0].strip('/')
-        if handle and handle not in handles:
-            handles.append(handle)
-    def get(url, **kwargs):
-        response = session.get(url, timeout=22, **kwargs)
-        if response.status_code == 429:
-            raise RuntimeError('HTTP 429: Suche gestoppt; später erneut versuchen.')
-        response.raise_for_status()
-        return response
-    try:
-        # Shopify predictive search is a targeted, small response.
-        response = get(BASE + '/de/search/suggest.json', params={
-            'q': str(sku).strip(), 'resources[type]': 'product',
-            'resources[limit]': 10})
-        products = (response.json().get('resources') or {}).get('results', {}).get('products', [])
-        for item in products:
-            link = str(item.get('url') or '')
-            if '/products/' in link:
-                add(urlparse(urljoin(BASE, link)).path.split('/products/', 1)[1])
-            else:
-                add(item.get('handle'))
-        diagnostics.append(f'Gezielte Shopify-Suche: {len(products)} Vorschläge')
-    except RuntimeError as exc:
-        return None, [str(exc)]
-    except Exception as exc:
-        diagnostics.append(f'Shopify-Suchvorschläge nicht verfügbar: {type(exc).__name__}')
-    try:
-        response = get(BASE + '/de/search', params={'q': str(sku).strip(), 'type': 'product'})
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for a in soup.select('a[href*="/products/"]'):
-            path = urlparse(urljoin(BASE, a.get('href', ''))).path
-            if '/products/' in path:
-                add(path.split('/products/', 1)[1])
-        diagnostics.append(f'Shop-Suchergebnisse: {len(handles)} eindeutige Produktlinks')
-    except RuntimeError as exc:
-        return None, diagnostics + [str(exc)]
-    except Exception as exc:
-        diagnostics.append(f'HTML-Suche nicht verfügbar: {type(exc).__name__}')
-    checked = 0
-    for handle in handles[:max_product_checks]:
-        try:
-            response = get(BASE + '/products/' + handle + '.js')
-            product = response.json()
-            checked += 1
-            title = str(product.get('title') or '')
-            actual_handle = str(product.get('handle') or handle)
-            candidates = []
-            for variant in product.get('variants') or []:
-                if variant.get('sku'):
-                    candidates.append(('Varianten-SKU', sku_key(variant['sku'])))
-            for raw in re.findall(r'(?<![A-Za-z0-9])(?:LB|L|F)\s*[-_]?\s*\d{3,7}(?![A-Za-z0-9])',
-                                  title + ' ' + actual_handle, flags=re.I):
-                candidates.append(('Titel/URL', sku_key(raw)))
-            match = next(((source, key) for source, key in candidates if key == code), None)
-            if match:
-                diagnostics.append(f'SKU {sku} bestätigt: {match[0]}')
-                return {'url': BASE + '/de/products/' + actual_handle,
-                        'title': title, 'sku': code, 'source': 'Gezielte Suche: ' + match[0]}, diagnostics
-        except RuntimeError as exc:
-            return None, diagnostics + [str(exc)]
-        except Exception as exc:
-            diagnostics.append(f'Produkt {handle}: {type(exc).__name__}')
-        time.sleep(1.5)
-    diagnostics.append(f'{checked} Produktdatensätze verifiziert; kein eindeutiger SKU-Treffer')
-    return None, diagnostics
-
-
-# Dedicated search checkpoint table. Does not modify existing offers or price history.
-def _ensure_search_progress(cur):
-    cur.execute("""CREATE TABLE IF NOT EXISTS public.lumibricks_search_progress (
-        sku TEXT PRIMARY KEY,
-        product_url TEXT,
-        title TEXT,
-        source TEXT,
-        checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )""")
-
-def load_search_progress(db_url):
-    """Return recent verified matches and misses (misses expire after seven days)."""
-    with connect(db_url) as c, c.cursor(row_factory=dict_row) as cur:
-        _ensure_search_progress(cur)
-        cur.execute("""SELECT sku, product_url, title, source FROM public.lumibricks_search_progress
-            WHERE product_url IS NOT NULL OR checked_at > NOW() - INTERVAL '7 days'""")
-        rows = cur.fetchall()
-    return {r['sku']: ({'url': r['product_url'], 'title': r['title'] or '',
-                        'sku': r['sku'], 'source': r['source'] or 'Gespeicherte Suche'}
-                       if r['product_url'] else None) for r in rows}
-
-def save_search_progress(db_url, sku, hit):
-    """Save a single completed SKU lookup; do not save 429 responses."""
-    with connect(db_url) as c, c.cursor() as cur:
-        _ensure_search_progress(cur)
-        cur.execute("""INSERT INTO public.lumibricks_search_progress(sku, product_url, title, source, checked_at)
-            VALUES (%s, %s, %s, %s, NOW()) ON CONFLICT (sku) DO UPDATE SET
-            product_url=EXCLUDED.product_url, title=EXCLUDED.title,
-            source=EXCLUDED.source, checked_at=NOW()""",
-            (sku, hit.get('url') if hit else None,
-             hit.get('title') if hit else None, hit.get('source') if hit else None))
+def set_link(url, pid, product_url):
+    """Change or unlink an offer. Unlinking preserves current_prices and price_history."""
+    clean=str(product_url or '').strip()
+    if clean:
+        if not is_valid_product_url(clean):
+            raise ValueError('Ungültiger Lumibricks-Produktlink')
+        return confirm(url,pid,clean)
+    mid=ensure_merchant(url)
+    with connect(url) as c, c.cursor(row_factory=dict_row) as cur:
+        cur.execute('UPDATE public.offers SET is_active=false WHERE product_id=%s AND merchant_id=%s AND is_active=true',
+                    (int(pid),mid))
+    return ''

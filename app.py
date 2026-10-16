@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.32 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.39 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -890,6 +890,7 @@ if edit_param != '':
                 new_ean = st.text_input('EAN / Barcode', value=str(current['ean']))
                 new_url = st.text_input('Brickmo-Produktlink', value=str(current['brickmo_url']))
                 new_loot_url = st.text_input('Lootstore-Produktlink', value=str(current['lootstore_url']))
+                new_lumi_url = st.text_input('Lumibricks-Produktlink (leer lassen zum Entfernen)', value=str(current['lumibricks_url']))
             with e2:
                 new_desc = st.text_input('Beschreibung', value=str(current['description']))
                 new_price = st.text_input('LBrixx-Verkaufspreis (€)', value=fmt(current['lbrixx_price']).replace(' €','') if euro_num(current['lbrixx_price']) is not None else '')
@@ -902,6 +903,7 @@ if edit_param != '':
             cleaned_sku = new_sku.strip().upper()
             cleaned_url = new_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
             cleaned_loot_url = new_loot_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
+            cleaned_lumi_url = new_lumi_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
             new_price_value = euro_num(new_price)
             other = df.drop(df.index[edit_index])
             if not cleaned_sku:
@@ -910,12 +912,16 @@ if edit_param != '':
                 st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse eintragen.')
             elif cleaned_loot_url and not valid_lootstore_url(cleaned_loot_url):
                 st.error('Bitte eine gültige Lootstore-HTTPS-Produktadresse eintragen.')
+            elif cleaned_lumi_url and not lumibricks_store.is_valid_product_url(cleaned_lumi_url):
+                st.error('Bitte eine gültige Lumibricks-HTTPS-Produktadresse eintragen.')
             elif new_price.strip() and (new_price_value is None or new_price_value < 0):
                 st.error('Der LBrixx-Preis muss eine gültige, nicht negative Zahl sein.')
             elif cleaned_sku in other.sku.str.upper().values:
                 st.error('Diese Hersteller-SKU ist bereits vorhanden.')
             elif cleaned_loot_url and cleaned_loot_url in other.lootstore_url.values:
                 st.error('Dieser Lootstore-Link ist bereits vorhanden.')
+            elif cleaned_lumi_url and cleaned_lumi_url in other.lumibricks_url.values:
+                st.error('Dieser Lumibricks-Link ist bereits vorhanden.')
             elif cleaned_url and cleaned_url in other.brickmo_url.values:
                 st.error('Dieser Brickmo-Link ist bereits vorhanden.')
             else:
@@ -934,7 +940,10 @@ if edit_param != '':
                 if cleaned_url != str(current['brickmo_url']):
                     for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'brickmo_photo'):
                         updated.at[edit_index, field] = ''
+                lumi_changed = cleaned_lumi_url != str(current['lumibricks_url']).strip()
                 try:
+                    if lumi_changed:
+                        lumibricks_store.set_link(DB_URL, str(current['db_id']), cleaned_lumi_url)
                     save_changed_rows(updated,[edit_index])
                     if new_price.strip() and new_price_value != euro_num(current['lbrixx_price']):
                         db_store.record_own_price(DB_URL, str(current['db_id']), new_price_value)
