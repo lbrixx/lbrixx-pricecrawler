@@ -107,8 +107,18 @@ def parse_eur(url):
     """Only accept explicit EUR price in structured data. Never interpret USD as EUR."""
     clean=canonical(url)
     session=requests.Session();session.headers.update(HEADERS)
-    session.cookies.set('localization','DE',domain='.lumibricks.com')
-    r=session.get(clean,params={'currency':'EUR'},timeout=30)
+    # Shopify Markets currency is controlled by storefront localization, not by
+    # a ?currency=EUR query parameter. Submit the Germany market selection first.
+    # A localized EUR price is still required in structured offers afterwards.
+    try:
+        session.post(BASE+'/localization',data={
+            'form_type':'localization', '_method':'put',
+            'country_code':'DE', 'language_code':'de',
+            'return_to':urlparse(clean).path,
+        },headers={'Referer':clean,'Origin':BASE},timeout=20)
+    except requests.RequestException:
+        pass  # Missing locale negotiation must never cause a guessed price.
+    r=session.get(clean,timeout=30)
     if r.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
     r.raise_for_status()
     soup=BeautifulSoup(r.text,'html.parser')
@@ -127,7 +137,8 @@ def parse_eur(url):
                     if isinstance(v,(dict,list)): visit(v)
         visit(data)
     if not prices:
-        raise ValueError('Kein ausdrücklich als EUR ausgewiesener Produktpreis gefunden; USD-Wert wird nicht gespeichert.')
+        currencies=sorted(set(re.findall(r'\"priceCurrency\"\s*:\s*\"([A-Z]{3})\"',r.text)))
+        raise ValueError('Kein ausdrücklich als EUR ausgewiesener Produktpreis gefunden (HTML-Währungen: '+(', '.join(currencies) or 'unbekannt')+'). Kein Preis übernommen. Website-Lokalisierung für DE/EUR prüfen.')
     if len(set(prices))>1:
         raise ValueError('Mehrere unterschiedliche EUR-Angebotspreise gefunden; keine eindeutige Preiszuordnung.')
     price=prices[0]

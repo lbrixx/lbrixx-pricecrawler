@@ -1,6 +1,7 @@
 import os, re, io, csv, json, base64, hashlib, html, time
 from urllib.parse import urlencode
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 import pandas as pd
 import requests
@@ -209,7 +210,8 @@ def short_date(value):
     if not raw: return 'nicht geprüft'
     try:
         dt=datetime.strptime(raw,'%Y-%m-%d %H:%M UTC')
-        return dt.strftime('%H:%M %d.%m.%y')
+        local=dt.replace(tzinfo=timezone.utc).astimezone(ZoneInfo('Europe/Berlin'))
+        return local.strftime('%H:%M %d.%m.%y')+' '+local.tzname()
     except ValueError: return raw[:22]
 
 def checked_status(value):
@@ -252,7 +254,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.49 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.51 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -1233,7 +1235,7 @@ else:
     if sort_field not in sort_choices.values(): sort_field='sku'
     sort_direction=st.query_params.get('dir','asc')
     if sort_direction not in ('asc','desc'): sort_direction='asc'
-    st.caption('Kompaktansicht · Überschrift anklicken zum Sortieren · Aktionen: ✏️ Bearbeiten, 🚫 Ausblenden, 🗑️ Löschen. SKU und Artikelname bleiben beim Scrollen sichtbar.')
+    st.caption('Kompaktansicht · Überschrift anklicken zum Sortieren · Aktionen: 🔄 Einzelpreisprüfung aller verknüpften Shops, ✏️ Bearbeiten, 🚫 Ausblenden, 🗑️ Löschen. SKU und Artikelname bleiben beim Scrollen sichtbar.')
     df_display = df_visible.copy()
     numeric_fields = {'odoo_id', 'lbrixx_price', 'brickmo_price', 'shipping', 'total', 'lootstore_price', 'lootstore_total', 'difference'}
     if sort_field == 'loot_difference':
@@ -1304,7 +1306,7 @@ else:
         chosen=photo if photo.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else fallback
         img=f'<img src="{cell(chosen)}" alt="Produktfoto" loading="lazy">' if chosen.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else '–'
         rows.append('<tr>' +
-            f'<td class="edit"><div class="action-group"><a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
+            f'<td class="edit"><div class="action-group"><a title="Alle verknüpften Shoppreise dieses Artikels prüfen" aria-label="Einzelpreisprüfung aller Shops" href="?price_row={row_idx}" target="_self">🔄</a> <a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
             f'<td class="photo">{img}</td>' +
             f'<td>{cell(r.sku)}</td>' +
             f'<td>{cell(r.brand_name)}</td>' +
@@ -1325,14 +1327,14 @@ else:
     .lbrixx-table td:not(.shop-price) a {color:#F5F7FB !important;}
     .lbrixx-table tr:nth-child(even) td:not(.shop-price) {background:#1c222d;}
     .lbrixx-table tr:hover td:not(.shop-price) {background:#313c4d;}
-    .lbrixx-table .edit {min-width:102px; width:102px; position:sticky; left:0; z-index:3;}
-    .lbrixx-table th:nth-child(1) {position:sticky;left:0;z-index:9;min-width:102px;width:102px;}
-    .lbrixx-table th:nth-child(2) {position:sticky;left:102px;z-index:8;min-width:54px;width:54px;}
-    .lbrixx-table td:nth-child(2) {position:sticky;left:102px;z-index:3;min-width:54px;width:54px;}
-    .lbrixx-table th:nth-child(3) {position:sticky;left:156px;z-index:8;min-width:90px;width:90px;}
-    .lbrixx-table td:nth-child(3) {position:sticky;left:156px;z-index:3;min-width:90px;width:90px;font-weight:650;}
-    .lbrixx-table th:nth-child(7) {position:sticky;left:246px;z-index:8;min-width:240px;width:240px;}
-    .lbrixx-table td:nth-child(7) {position:sticky;left:246px;z-index:3;min-width:240px;width:240px;max-width:240px;white-space:normal;}
+    .lbrixx-table .edit {min-width:134px; width:134px; position:sticky; left:0; z-index:3;}
+    .lbrixx-table th:nth-child(1) {position:sticky;left:0;z-index:9;min-width:134px;width:134px;}
+    .lbrixx-table th:nth-child(2) {position:sticky;left:134px;z-index:8;min-width:54px;width:54px;}
+    .lbrixx-table td:nth-child(2) {position:sticky;left:134px;z-index:3;min-width:54px;width:54px;}
+    .lbrixx-table th:nth-child(3) {position:sticky;left:188px;z-index:8;min-width:90px;width:90px;}
+    .lbrixx-table td:nth-child(3) {position:sticky;left:188px;z-index:3;min-width:90px;width:90px;font-weight:650;}
+    .lbrixx-table th:nth-child(7) {position:sticky;left:278px;z-index:8;min-width:240px;width:240px;}
+    .lbrixx-table td:nth-child(7) {position:sticky;left:278px;z-index:3;min-width:240px;width:240px;max-width:240px;white-space:normal;}
     .lbrixx-table .action-group {display:flex;align-items:center;gap:3px;}
     .lbrixx-table .edit a {display:inline-flex;align-items:center;justify-content:center; width:28px;height:27px; border:1px solid rgba(128,128,128,.5); border-radius:5px; text-decoration:none; color:inherit; font-size:14px;}
     .lbrixx-table .edit a:hover {background:rgba(128,128,128,.25);}
@@ -1348,6 +1350,11 @@ else:
     .lbrixx-table .shop-price .shipping-note {font-size:10px;font-weight:500;margin-top:3px;opacity:.95;}
     .lbrixx-table .shop-price .timestamp {font-size:10px;font-weight:400;margin-top:2px;opacity:.9;}
     .lbrixx-table th a:hover {text-decoration:underline!important;}
+    .lbrixx-table th .refresh-price {display:block; box-sizing:border-box; text-align:center; margin:0 0 7px 0;
+        padding:7px 10px; background:#151c28; border:1px solid #7b8795; border-radius:7px;
+        font-size:13px; font-weight:700; color:#fff!important; text-decoration:none!important;}
+    .lbrixx-table th .refresh-price:hover {background:#273b52;}
+
     </style>
     """
     headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis inkl. Versand ↗','Lootstore-Preis inkl. Versand ↗','Lumibricks-Preis inkl. Versand ↗']
@@ -1357,25 +1364,103 @@ else:
         next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
         arrow=(' ▲' if sort_direction=='asc' else ' ▼') if sort_field==k else ''
         query = urlencode({'sort': k, 'dir': next_dir, 'view': article_view, 'brand': brand_selection})
-        return f'<th><a href="?{html.escape(query, quote=True)}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
+        provider_for_col={'total':'brickmo','lootstore_total':'lootstore','lumibricks_total':'lumibricks'}
+        refresh=''
+        if k in provider_for_col:
+            pq=urlencode({'price_refresh':provider_for_col[k], 'sort':sort_field, 'dir':sort_direction, 'view':article_view, 'brand':brand_selection})
+            refresh=f'<a class="refresh-price" href="?{html.escape(pq, quote=True)}" target="_self">🔄 {provider_for_col[k].capitalize()}</a>'
+        return f'<th>{refresh}<a href="?{html.escape(query, quote=True)}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
     table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
-    # Refresh controls directly above the three competitor price columns.
-    # Streamlit widgets cannot be embedded in the sortable HTML table itself.
+    # Refresh links are embedded in each table header; horizontally scrolling the
+    # table now moves a button and its corresponding price column together.
     st.markdown('#### Preise aktualisieren')
-    st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Mindestens 2 Sekunden zwischen Shop-Anfragen; HTTP 429 stoppt die jeweilige Serie. Zeitangaben UTC.')
-    left, a, b, c = st.columns([5, 1.25, 1.25, 1.25], gap='small')
-    with left:
-        st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv')
-    with a: brickmo_update=st.button('🔄 Brickmo',use_container_width=True)
-    with b: loot_update=st.button('🔄 Lootstore',use_container_width=True)
-    with c: lumi_update=st.button('🔄 Lumibricks',use_container_width=True)
+    st.caption('Aktualisieren direkt oberhalb der jeweiligen Preisspalte. Mindestens 2 Sekunden Abstand; HTTP 429 stoppt die Serie. Zeitangaben in Berlin (MEZ/MESZ).')
+    st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv')
+    # Row-specific one-click refresh: only this product and only its linked shops.
+    row_refresh_param=st.query_params.get('price_row','')
+    row_refresh_index=None
+    if row_refresh_param != '':
+        try:
+            candidate=int(row_refresh_param)
+            if candidate not in df.index or checked_status(df.at[candidate,'deleted']) or checked_status(df.at[candidate,'hidden']):
+                raise ValueError('Artikel in der aktiven Ansicht nicht verfügbar.')
+            row_refresh_index=candidate
+        except (ValueError,TypeError,KeyError) as exc:
+            st.error(f'Ungültige Einzelpreisprüfung: {exc}')
+        finally:
+            del st.query_params['price_row']
+    refresh_from_link=st.query_params.get('price_refresh','')
+    if refresh_from_link not in ('brickmo','lootstore','lumibricks'): refresh_from_link=''
+    if refresh_from_link:
+        # Consume one-shot action, avoiding accidental repeat on refresh.
+        del st.query_params['price_refresh']
+    brickmo_update=refresh_from_link=='brickmo'
+    loot_update=refresh_from_link=='lootstore'
+    lumi_update=refresh_from_link=='lumibricks'
     st.html(table_html)
-    st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel in UTC.')
+    st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel: Berlin (MEZ/MESZ).')
+    if st.session_state.get('last_lumi_price_run'):
+        report=st.session_state['last_lumi_price_run']
+        st.info(f"Letzte Lumibricks-Prüfung: {report['ok']} Preise aktualisiert, {report['failed']} fehlgeschlagen, {report['total']} verknüpfte Artikel.")
+        with st.expander('Ergebnisse und Fehler der letzten Lumibricks-Prüfung'):
+            for line in report['details']: st.text(line)
+    if st.session_state.get('last_row_price_run'):
+        report=st.session_state['last_row_price_run']
+        st.info(f"Einzelpreisprüfung {report['sku']}: {report['ok']} erfolgreich, {report['failed']} fehlgeschlagen, {report['skipped']} Shops ohne Zuordnung.")
+        with st.expander('Ergebnis der Einzelpreisprüfung je Shop', expanded=True):
+            for detail in report['details']:
+                st.write(detail)
     active=df.loc[~deleted_mask & ~hidden_mask]
     selectable={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":int(i) for i,r in active.iterrows()}
     chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
     provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Lumibricks','Brickmo und Lootstore','Alle drei'])
     one_update=st.button('🔄 Gewählten Artikel aktualisieren')
+    if row_refresh_index is not None:
+        # Different providers persist via their existing, proven pathways.
+        r=df.loc[row_refresh_index]
+        report={'sku':str(r.sku),'ok':0,'failed':0,'skipped':0,'details':[]}
+        updated=df.copy()
+        changed_indices=[]
+        for shop in ('brickmo','lootstore','lumibricks'):
+            field={'brickmo':'brickmo_url','lootstore':'lootstore_url','lumibricks':'lumibricks_url'}[shop]
+            shop_url=str(r[field]).strip()
+            valid_link=(lumibricks_store.valid_url(shop_url) if shop=='lumibricks'
+                        else valid_url(shop_url) if shop=='brickmo' else valid_lootstore_url(shop_url))
+            if not valid_link:
+                report['skipped']+=1
+                report['details'].append(f'{shop.capitalize()}: Übersprungen (kein gültiger Produktlink)')
+                continue
+            try:
+                if shop=='lumibricks':
+                    product_id=str(r.db_id).strip()
+                    if not product_id or not product_id.isdigit():
+                        raise ValueError('Datenbank-ID des Artikels fehlt')
+                    saved_price=lumibricks_store.record(DB_URL,product_id,shop_url)
+                    report['details'].append(f'Lumibricks: {saved_price} EUR gespeichert')
+                else:
+                    updated,ok,failed=update_prices(updated,shop,[row_refresh_index])
+                    changed_indices.append(row_refresh_index)
+                    if failed or not ok:
+                        errfield='error' if shop=='brickmo' else 'lootstore_error'
+                        raise RuntimeError(str(updated.at[row_refresh_index,errfield]) or 'Keine Preisantwort')
+                    total_field='total' if shop=='brickmo' else 'lootstore_total'
+                    report['details'].append(f'{shop.capitalize()}: Preisprüfung erfolgreich ({fmt(updated.at[row_refresh_index,total_field])})')
+                report['ok']+=1
+            except Exception as exc:
+                report['failed']+=1
+                report['details'].append(f'{shop.capitalize()}: FEHLER – {exc}')
+                if '429' in str(exc):
+                    report['details'].append('HTTP 429: Weitere Shops für diesen Artikel nicht abgefragt.')
+                    break
+            if shop!='lumibricks': time.sleep(2)
+        try:
+            if changed_indices: save_changed_rows(updated,changed_indices)
+            st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+        except Exception as exc:
+            report['failed']+=1
+            report['details'].append(f'Datenbank/Anzeige: FEHLER – {exc}')
+        st.session_state['last_row_price_run']=report
+        st.rerun()
     if lumi_update:
         lumi_active=df.loc[~deleted_mask & ~hidden_mask]
         lumi_rows=[r for _,r in lumi_active.iterrows() if str(r.lumibricks_url).strip() and str(r.db_id).strip()]
@@ -1385,12 +1470,15 @@ else:
             st.write(f'Lumibricks: {len(lumi_rows)} Produktseiten werden geprüft.')
             lumi_progress=st.progress(0)
             lumi_ok=lumi_failed=0
+            lumi_details=[]
             for pos,r in enumerate(lumi_rows):
                 try:
-                    lumibricks_store.record(DB_URL,r.db_id,str(r.lumibricks_url))
+                    saved_price=lumibricks_store.record(DB_URL,r.db_id,str(r.lumibricks_url))
                     lumi_ok+=1
+                    lumi_details.append(f"{r.sku}: {saved_price} EUR gespeichert")
                 except Exception as exc:
                     lumi_failed+=1
+                    lumi_details.append(f'FEHLER {r.sku}: {exc}')
                     st.warning(f'Lumibricks {r.sku}: {exc}')
                     if '429' in str(exc):
                         st.warning('Lumibricks: HTTP 429 – Serie abgebrochen.')
@@ -1398,12 +1486,16 @@ else:
                         break
                 lumi_progress.progress((pos+1)/len(lumi_rows))
                 if pos+1<len(lumi_rows): time.sleep(2)
-            st.success(f'Lumibricks: {lumi_ok} erfolgreich, {lumi_failed} fehlgeschlagen. Preise direkt in PostgreSQL gespeichert.')
+            st.session_state['last_lumi_price_run']={'ok':lumi_ok,'failed':lumi_failed,'total':len(lumi_rows),'details':lumi_details}
+            if lumi_ok: st.success(f'Lumibricks: {lumi_ok} Preise in PostgreSQL gespeichert.')
+            if lumi_failed: st.error(f'Lumibricks: {lumi_failed} Artikel nicht aktualisiert. Fehlermeldungen unten prüfen.')
+            with st.expander('Detailliertes Ergebnis der Preisprüfung',expanded=bool(lumi_failed)):
+                for line in lumi_details: st.text(line)
             try:
                 st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                st.info('Neue Preise werden beim nächsten Neuladen der Artikelübersicht angezeigt.')
             except Exception as exc:
                 st.warning(f'Preise gespeichert, aber Ansicht konnte nicht neu geladen werden: {exc}')
-            st.rerun()
     if brickmo_update or loot_update or one_update:
         new=df.copy()
         shops=['brickmo'] if brickmo_update else ['lootstore'] if loot_update else ['brickmo','lootstore','lumibricks'] if provider=='Alle drei' else ['brickmo','lootstore'] if provider=='Brickmo und Lootstore' else [provider.lower()]
