@@ -220,7 +220,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11.9 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11.14 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -644,16 +644,27 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
         with st.expander('Index-Diagnose', expanded=False):
             for note in full_report['notes']: st.caption(note)
             st.write('Beispiel-SKUs:', ', '.join(full_report['sample_skus']) or 'Keine')
+            st.caption('Falls Mattel 0 SKU-Links meldet: Produktdetail-Anreicherung für die Mattel-Kategorie starten; die Produktnummern stehen möglicherweise nur auf den Detailseiten.')
         if st.button('Mit LBrixx-Artikeln abgleichen', key='full_category_compare'):
             try:
                 products_to_match = st.session_state.products.copy()
                 products_to_match = products_to_match[(products_to_match['deleted']!='1') & (products_to_match['brickmo_url'].astype(str).str.strip()=='')]
                 indexed = brickmo_index.batch_match_skus(DB_URL, [key for _, p in products_to_match.iterrows() for key in brickmo_match_keys(p)])
                 comparison = []
+                rejected_brand = 0
+                unknown_brand = 0
                 for _, product in products_to_match.iterrows():
+                    own_brand = brickmo_index.brand_key(product.get('brand_name', ''))
                     seen_urls = set()
                     for key in brickmo_match_keys(product):
                         for match in indexed.get(key, []):
+                            catalog_brand = brickmo_index.brand_key(brickmo_index.catalog_brand(match['source_sitemap']))
+                            if not own_brand or not catalog_brand:
+                                unknown_brand += 1
+                                continue
+                            if own_brand != catalog_brand:
+                                rejected_brand += 1
+                                continue
                             if match['product_url'] in seen_urls:
                                 continue
                             seen_urls.add(match['product_url'])
@@ -661,12 +672,15 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
                                 'LBrixx-Artikel':str(product['description']),
                                 'Brickmo-Produkt':match['product_title'], 'Brickmo-Link':match['product_url'],
                                 'Quelle':match['source_sitemap'], 'Treffer-SKU':key})
+                st.session_state.full_category_diagnostics = (rejected_brand, unknown_brand)
                 st.session_state.full_category_comparison = comparison
             except Exception as exc:
                 st.error(f'Abgleich fehlgeschlagen: {exc}')
         comparison = st.session_state.get('full_category_comparison')
         if comparison is not None:
             st.write(f'{len(comparison)} mögliche Zuordnungsvorschläge – nur nach Einzelbestätigung gespeichert.')
+            rejected_brand, unknown_brand = st.session_state.get('full_category_diagnostics', (0, 0))
+            st.caption(f'Markenfilter: {rejected_brand} markenfremde Treffer und {unknown_brand} Treffer ohne gesicherte Markeninformation ausgeschlossen. Für ältere Indexeinträge bitte die jeweilige Herstellerkategorie erneut indexieren.')
             for i, candidate in enumerate(comparison):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")

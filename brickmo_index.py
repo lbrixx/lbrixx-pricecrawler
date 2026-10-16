@@ -299,6 +299,32 @@ def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8
 
 
 # V28.7: Category-wide index; no modification of existing LBrixx offers.
+# Brand-specific provenance for category indexing. Unknown categories are not
+# eligible for automatic brand-constrained proposals.
+BRAND_CATEGORY_PATHS = {
+    '/weitere-marken/funwhole/': 'FunWhole',
+    '/weitere-marken/pantasy/': 'Pantasy',
+    '/weitere-marken/reobrix/': 'Reobrix',
+    '/wange/': 'Wange',
+    '/cat/index/scategory/6589/': 'Mould King',
+    '/weitere-marken/happy-build/': 'Happy Build',
+    '/weitere-marken/mattel-brick-shop/': 'Mattel Brick Shop',
+    '/cada/': 'CaDA',
+}
+
+def category_brand(category_url):
+    path = urlparse(category_url).path.lower().rstrip('/') + '/'
+    return BRAND_CATEGORY_PATHS.get(path, '')
+
+def catalog_brand(source):
+    m = re.search(r'\[Marke: ([^\]]+)\]', str(source or ''))
+    return m.group(1).strip() if m else ''
+
+def brand_key(value):
+    key = re.sub(r'[^a-z0-9]', '', str(value or '').casefold())
+    return {'mattel':'mattelbrickshop', 'mouldking':'mouldking',
+            'funwhole':'funwhole', 'lumibricks':'lumibricks'}.get(key, key)
+
 def _category_sku_from_url(url):
     """Conservative brand-aware SKU extraction from Brickmo product slugs.
 
@@ -320,6 +346,13 @@ def _category_sku_from_url(url):
         m = re.search(r'(?:^|[-_])(lb\d{3,6}|l\d{4,6}|\d{4,6})$', slug)
         if m:
             return normalized_sku(m.group(1))
+    # Mattel Brick Shop: model identifiers such as JFT16, with optional
+    # retailer suffix JFT16_MA. Require an explicit Mattel/Hot-Wheels brand
+    # marker in the slug; never infer an arbitrary alphanumeric token.
+    if ('mattel' in parts and 'brick' in parts) or ('hot' in parts and 'wheels' in parts) or 'mattel' in parts:
+        m = re.search(r'(?:^|[-_])([a-z]{2,5}\d{2,6})(?:[-_](?:ma))?(?=$|[-_])', slug)
+        if m:
+            return m.group(1).upper()
     # Wange product titles often include W5223 rather than numeric 5223.
     # Extract only an explicit W-prefixed model code from a Wange URL.
     if 'wange' in parts:
@@ -402,7 +435,7 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=250, timeout=1
                 sku = _category_sku_from_url(href)
                 if sku:
                     slug = unquote(pu.path.rsplit('/', 1)[-1]).replace('-', ' ')
-                    records[clean] = (clean, sku, slug, 'Brickmo-Kategorie: SKU aus URL (unbestätigt)')
+                    records[clean] = (clean, sku, slug, 'Brickmo-Kategorie: SKU aus URL (unbestätigt) [Marke: ' + category_brand(category_url) + ']')
             checked += 1
             notes.append(f'Seite {page_no}: {new} neue Produktlinks; {len(all_links)} insgesamt; {len(records)} SKU-Links')
             if new == 0:
@@ -506,14 +539,14 @@ def enrich_category_skus(db_url, category_url, limit=25, timeout=15):
             # Check only the main product details, never related-product listings.
             main = soup.select_one('.product--details') or soup.select_one('.product--detail') or soup.select_one('main') or soup
             content = main.get_text(' ', strip=True)
-            found = re.search(r'(?:Produkt-Nr\.|Artikel-Nr\.|Artikelnummer|Produktnummer)\s*:?\s*([A-Z]{0,4}[- ]?\d{3,7}[A-Z]?)\b', content, re.I)
+            found = re.search(r'(?:Produkt-Nr\.|Artikel-Nr\.|Artikelnummer|Produktnummer)\s*:?\s*([A-Z]{1,6}[- ]?\d{2,8}(?:_MA)?|\d{3,7})\b', content, re.I)
             if not found:
                 notes.append(f'{u}: keine eindeutig beschriftete Artikelnummer')
                 continue
             sku = normalized_sku(found.group(1).replace(' ', '').replace('-', ''))
             title = soup.select_one('h1')
             title = title.get_text(' ', strip=True) if title else u.rsplit('/', 1)[-1].replace('-', ' ')
-            records.append((u, sku, title, 'Brickmo-Produktdetails (SKU bestätigt)'))
+            records.append((u, sku, title, 'Brickmo-Produktdetails (SKU bestätigt) [Marke: ' + category_brand(category_url) + ']'))
         except requests.RequestException as exc:
             notes.append(f'{u}: {type(exc).__name__}: {str(exc)[:90]}')
         time.sleep(0.6)
