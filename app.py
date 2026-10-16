@@ -235,8 +235,11 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11.15 · PostgreSQL')
+header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
+with header_logo:
+    st.image('lbrixx_logo.png', use_container_width=True)
+with header_title:
+    st.markdown('### Preisvergleich V28.11.20 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -364,12 +367,11 @@ def odoo_merge(existing, products):
 with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded=False):
     st.caption('Odoo wird nur gelesen. Produktnamen werden mit deutschem Sprachkontext (de_DE) abgefragt. Fehlt eine Übersetzung, liefert Odoo ggf. den ursprünglichen Namen.')
     st.write('Server:', ODOO_URL or 'Nicht konfiguriert')
-    import_scope=st.radio('Importumfang', ['5 Testartikel', '100 Artikel', 'Alle Artikel'], horizontal=True, index=0)
     col_test,col_import=st.columns(2)
     with col_test:
         test_odoo=st.button('🔍 Odoo-Verbindung testen',use_container_width=True)
     with col_import:
-        import_odoo=st.button('📥 Odoo-Produkte importieren / aktualisieren',use_container_width=True)
+        import_odoo=st.button('📥 Alle Artikel aus Odoo aktualisieren',use_container_width=True)
     if test_odoo:
         try:
             sample=odoo_read(limit=5)
@@ -380,13 +382,13 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
     if import_odoo:
         try:
             all_products=[]
-            max_items={'5 Testartikel':5,'100 Artikel':100,'Alle Artikel':10000}[import_scope]
+            max_items=10000
             for offset in range(0,max_items,100):
                 batch_limit=min(100,max_items-offset)
                 batch=odoo_read(limit=batch_limit,offset=offset)
                 all_products.extend(batch)
                 if len(batch)<batch_limit: break
-            if max_items==10000 and len(all_products)==10000:
+            if len(all_products)==max_items:
                 st.warning('Import auf 10.000 Produkte begrenzt.')
             brands=odoo_brand_values(all_products)
             for item in all_products:
@@ -959,7 +961,22 @@ st.caption(f'{int((~hidden_mask & ~deleted_mask).sum())} sichtbare Artikel · {i
 display_mask=pd.Series(True,index=df.index)
 if not show_hidden: display_mask &= ~hidden_mask
 if not show_deleted: display_mask &= ~deleted_mask
+# Anzeige-Filter: nur die sichtbare Artikelliste, keine Datenbankänderung.
+brand_values = sorted(
+    {str(v).strip() for v in df['brand_name'].fillna('') if str(v).strip()},
+    key=str.casefold,
+)
+brand_selection = st.selectbox(
+    'Markenfilter',
+    ['Alle Marken', 'Ohne Marke'] + brand_values,
+    key='article_brand_filter',
+)
+if brand_selection == 'Ohne Marke':
+    display_mask &= df['brand_name'].fillna('').astype(str).str.strip().eq('')
+elif brand_selection != 'Alle Marken':
+    display_mask &= df['brand_name'].fillna('').astype(str).str.strip().eq(brand_selection)
 df_visible=df.loc[display_mask].copy()
+st.caption(f'{len(df_visible)} Artikel in der aktuellen Auswahl')
 
 if df.empty: st.info('Noch keine Artikel vorhanden.')
 else:
