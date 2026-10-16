@@ -254,7 +254,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.51 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.54 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -1157,7 +1157,7 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                     st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
                     st.success(f'EUR-Preis gespeichert: {fmt(price)} · Versand 0,00 €');st.rerun()
                 except Exception as exc: st.error(f'Preis nicht übernommen: {exc}')
-st.caption('Lumibricks-Preise werden nur bei eindeutigem EUR-Nachweis gespeichert. Bei abweichender Währung bleibt der letzte bestätigte Preis erhalten.')
+st.caption('Lumibricks: Bei USD-Serverantwort wird ein JavaScript-Browserabruf versucht. Nur stabile und eindeutig erkennbare EUR-Preise werden gespeichert; Browser-Fallback benötigt Playwright + Chromium.')
 
 # Hidden state is persisted in the existing GitHub CSV and retained during Odoo merges.
 # Use the original dataframe index so sorting/filtering never changes edit targets.

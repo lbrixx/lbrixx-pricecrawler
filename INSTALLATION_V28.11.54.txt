@@ -1,0 +1,29 @@
+LBrixx Price-Crawler V28.11.54 — Lumibricks EUR Browser-Fallback
+
+1. app.py und lumibricks_store.py im GitHub-Repository ersetzen.
+2. In der BEREITS BESTEHENDEN requirements.txt eine neue Zeile ergänzen:
+   playwright>=1.45,<2
+   Die bisherige requirements.txt NICHT überschreiben.
+3. In packages.txt (auf Streamlit Community Cloud) eine Zeile ergänzen:
+   chromium
+   Falls packages.txt noch nicht vorhanden ist, neu anlegen.
+   Auf anderen Hosts einen installierten Chromium-Browser verwenden und ggf.
+   LBRIXX_CHROMIUM_PATH auf dessen Pfad setzen.
+4. Streamlit neu deployen und NUR EINEN zugeordneten Lumibricks-Artikel
+   über die Einzelaktualisierung testen. Den Detailfehler im Expander lesen.
+
+Ablauf:
+- Bisherige serverseitige, ausdrücklich EUR-bestätigte Abrufe bleiben erhalten.
+- Falls nur USD kommt, wird Playwright/Chromium verwendet, damit Javascript
+  den EUR-Preis auf der Produktseite darstellen kann.
+- Es wird KEIN USD-Betrag umgerechnet. Mehrdeutige oder instabile EUR-Preise
+  werden nicht gespeichert, ebenso wenig bei fehlendem Chromium.
+- Es wurden keine Datenbankmigrationen oder Zuordnungsänderungen vorgenommen.
+
+Einschränkungen:
+- Der Live-Aufruf der Lumibricks-Website war in der Entwicklungsumgebung
+  nicht möglich; Selektoren und Umschaltung sind daher noch nicht live validiert.
+- Einige Shops zeigen Aktionspreis und Streichpreis zugleich: In diesem Fall
+  meldet die App absichtlich einen Fehler statt möglicherweise falsch zu speichern.
+- Nicht alle Streamlit-Hosts unterstützen die Installation von chromium über
+  packages.txt. Ein entsprechender Fehler wird im Einzelergebnis sichtbar.

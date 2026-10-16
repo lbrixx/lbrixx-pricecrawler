@@ -197,6 +197,128 @@ def _currency_session(approach,clean):
     return session, response.status_code
 
 
+def _browser_eur_price(clean):
+    """Read the post-JavaScript, visibly EUR-denominated product price.
+
+    Requires Playwright plus a Chromium executable in the deployment environment.
+    Does not convert USD or use Shopify's initial USD product JSON price.
+    """
+    import os, shutil
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+    except ImportError as exc:
+        raise ValueError('Browser-Fallback nicht installiert: Paket playwright fehlt. '
+                         'Bitte requirements.txt ergänzen.') from exc
+
+    executable = (os.environ.get('LBRIXX_CHROMIUM_PATH') or
+                  next((shutil.which(x) for x in ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable')
+                        if shutil.which(x)), None))
+    with sync_playwright() as playwright:
+        launch_args={'headless':True, 'args':['--no-sandbox', '--disable-dev-shm-usage']}
+        if executable:
+            launch_args['executable_path']=executable
+        try:
+            browser=playwright.chromium.launch(**launch_args)
+        except Exception as exc:
+            raise ValueError('Chromium nicht verfügbar. Chromium in Streamlit installieren '
+                             '(packages.txt) oder LBRIXX_CHROMIUM_PATH setzen: '
+                             +str(exc)[:180]) from exc
+        try:
+            context=browser.new_context(locale='de-DE',timezone_id='Europe/Berlin',
+                                        extra_http_headers={'Accept-Language':'de-DE,de;q=0.9'},
+                                        viewport={'width':1365,'height':900})
+            page=context.new_page()
+            try:
+                page.goto(clean,wait_until='domcontentloaded',timeout=35000)
+                page.wait_for_timeout(3000)
+                # Check whether browser automatically selected EUR. Otherwise
+                # click a visible currency selector (no assumption about Shopify endpoints).
+                def state():
+                    return page.evaluate("""() => {
+                      const visible = e => !!(e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+                      const selectors = ['main .price', 'main .product__price', 'main [class*="price-item"]',
+                        'main [class*="product-price"]', '.product-info .price',
+                        '[data-product-price]', '[data-price-wrapper]', '.product-single__price'];
+                      let texts=[];
+                      for(const sel of selectors) for(const el of document.querySelectorAll(sel)) {
+                        if(visible(el)) texts.push((el.innerText||el.textContent||'').trim().slice(0,150));
+                      }
+                      return {prices:[...new Set(texts)].filter(Boolean).slice(0,25),
+                        title:document.title, body:(document.body?.innerText||'').slice(0,2000)};
+                    }""")
+                initial=state()
+                if not any('€' in x or 'EUR' in x for x in initial['prices']):
+                    # Interact ONLY with visible controls bearing currency markers;
+                    # fallback to an option after opening an explicit currency selector.
+                    for selector in ('button:has-text("USD")', '[role="button"]:has-text("USD")',
+                                     'summary:has-text("USD")', 'button:has-text("Currency")',
+                                     'button:has-text("Währung")', 'select[name*="currency"]'):
+                        candidates=page.locator(selector)
+                        try:
+                            if candidates.count() and candidates.first.is_visible():
+                                if selector.startswith('select'):
+                                    candidates.first.select_option('EUR',timeout=2000)
+                                else:
+                                    candidates.first.click(timeout=2500)
+                                page.wait_for_timeout(650)
+                                for eur in ('[role="option"]:has-text("EUR")',
+                                            'button:has-text("EUR")',
+                                            'a:has-text("EUR")',
+                                            'li:has-text("EUR")',
+                                            'label:has-text("EUR")'):
+                                    item=page.locator(eur)
+                                    if item.count() and item.first.is_visible():
+                                        item.first.click(timeout=2500)
+                                        break
+                                break
+                        except Exception:
+                            continue
+                # The original USD price may flash while JS runs. Check twice,
+                # with a delay, and accept only an unambiguous current EUR amount.
+                page.wait_for_timeout(2800)
+                first=state()
+                page.wait_for_timeout(1500)
+                second=state()
+            except PlaywrightTimeout as exc:
+                raise ValueError('Browser-Abfrage abgelaufen (Lumibricks-Seite lädt zu langsam)') from exc
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+    def extract(details):
+        euro=[]
+        for content in details['prices']:
+            # Require euro symbol or a standalone EUR tag on the price component.
+            if not re.search(r'€|\bEUR\b',content,re.I):
+                continue
+            # Product price components sometimes include struck-out compare-at prices.
+            # Refuse ambiguous multiple amounts instead of guessing which one to use.
+            amounts=re.findall(r'(?:(?:€\s*|EUR\s*)([0-9][0-9.,\s]*))|(?:([0-9][0-9.,\s]*)\s*(?:€|EUR))',content,re.I)
+            for left,right in amounts:
+                raw=(left or right).strip().replace(' ','').replace('\xa0','')
+                if not raw: continue
+                if ',' in raw:
+                    raw=raw.replace('.','').replace(',','.')
+                elif raw.count('.') > 1:
+                    raw=raw.replace('.','')
+                try:
+                    amount=Decimal(raw)
+                    if Decimal('0') < amount < Decimal('100000'):
+                        euro.append(amount)
+                except Exception:
+                    continue
+        return set(euro)
+    first_prices=extract(first)
+    second_prices=extract(second)
+    common=first_prices & second_prices
+    if len(common)==1 and len(first_prices)==1 and len(second_prices)==1:
+        return next(iter(common)), 'unknown'
+    raise ValueError('Browser zeigt keinen stabilen, eindeutigen EUR-Produktpreis '
+                     f'(Preisfelder nach JavaScript: {second["prices"][:6]!r}; '
+                     f'EUR-Kandidaten: {sorted(second_prices)}). Kein Preis gespeichert.')
+
+
 def parse_eur(url):
     """Fetch verified German EUR pricing without ever relabeling USD.
 
@@ -244,10 +366,16 @@ def parse_eur(url):
     if len(set(prices))>1:
         raise ValueError('Mehrere EUR-Angebote – kein eindeutiger Preis')
     currencies=sorted(set(re.findall(r'"priceCurrency"\s*:\s*"([A-Z]{3})"',page.text)))
-    raise ValueError('Kein verifizierter EUR-Preis. '
-        +'Währungsprüfung: '+'; '.join(diagnostics)
-        +'; HTML: '+(', '.join(currencies) or 'unbekannt')
-        +'. USD wurde nicht übernommen.')
+    # The storefront switches USD -> EUR after page load using JavaScript.
+    # This browser step is deliberately last so fast, verified EUR paths win.
+    try:
+        return _browser_eur_price(clean)
+    except Exception as exc:
+        raise ValueError('Kein verifizierter EUR-Preis. Währungsprüfung: '
+                         + '; '.join(diagnostics)
+                         + '; HTML: ' + (', '.join(currencies) or 'unbekannt')
+                         + '; Browser: ' + str(exc)[:440]
+                         + '. USD wurde nicht übernommen.') from exc
 
 def record(url,pid,product_url):
     clean=canonical(product_url)
