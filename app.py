@@ -487,8 +487,8 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.25)', expanded=False):
-    st.caption('Liest die Shopify-Produktliste der gesamten Lootstore-Klemmbaustein-Kategorie. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.26)', expanded=False):
+    st.caption('Indexiert Shopify-Produktliste und zusätzlich Produktlinks der Kategorieseiten. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
     if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
         try:
             with st.spinner('Lootstore-Katalog wird eingelesen…'):
@@ -506,12 +506,13 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.25)', expande
                 st.caption(note)
             st.write('Beispiel-SKUs:', ', '.join(loot_report['sample_skus']) or 'Keine')
     with st.expander('🔎 Lootstore-SKU-Einzeldiagnose (Pantasy)', expanded=False):
-        st.caption('Prüft den gespeicherten Lootstore-Index und sucht zusätzlich live nach dem Produkt. Keine automatische Zuordnung oder Datenbankänderung.')
+        st.caption('Prüft Index, Shopify-Suche, HTML-Suche und optional einen direkten Produktlink. Keine automatische Zuordnung oder Datenbankänderung.')
         diagnostic_sku = st.text_input('Pantasy-Artikelnummer', value='85029', key='lootstore_diagnostic_sku')
-        if st.button('SKU  prüfen', key='lootstore_sku_diagnostic_run'):
+        diagnostic_url = st.text_input('Direkter Lootstore-Produktlink (optional)', value='https://lootstore.de/products/pantasy-steampunk-die-nautilus-85029-klemmbausteinset', key='lootstore_diagnostic_url')
+        if st.button('SKU prüfen', key='lootstore_sku_diagnostic_run'):
             try:
                 with st.spinner('Index und Lootstore-Produktsuche prüfen…'):
-                    st.session_state.lootstore_sku_diagnostic = lootstore_index.diagnose_sku(DB_URL, diagnostic_sku)
+                    st.session_state.lootstore_sku_diagnostic = lootstore_index.diagnose_sku(DB_URL, diagnostic_sku, product_url=diagnostic_url)
             except Exception as exc:
                 st.error(f'SKU-Diagnose fehlgeschlagen: {exc}')
         result = st.session_state.get('lootstore_sku_diagnostic')
@@ -527,6 +528,10 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.25)', expande
                 if not entry['pantasy']:
                     st.warning('Hersteller im Shopify-Produktdatensatz ist nicht Pantasy – kein automatischer Abgleich.')
                 st.markdown(f"[Produkt öffnen]({entry['url']})")
+            for entry in result.get('unverified', []):
+                st.warning(f"Produktseite gefunden, SKU nicht bestätigt: {entry['title']} · Hersteller {entry['brand']} · Varianten-SKUs: {', '.join(entry['skus']) or 'keine'}")
+                st.markdown(f"[Produkt öffnen]({entry['url']})")
+            st.caption(f"{result.get('checked_handles', 0)} Produktlinks bei der Live-Diagnose geprüft.")
             if not result['live']:
                 st.info('Kein bestätigter Live-SKU-Treffer. Das bedeutet nicht zwingend, dass die Produktseite nicht existiert.')
             for err in result['errors']:
