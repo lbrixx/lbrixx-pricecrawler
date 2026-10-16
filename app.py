@@ -197,7 +197,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11.1 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -356,8 +356,17 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
                 if tmpl in brands:
                     item['_brand_id'],item['_brand_name']=brands[tmpl]
             merged,added,updated,skipped=odoo_merge(st.session_state.products,all_products)
-            save(merged)
-            st.success(f'Odoo-Synchronisierung gespeichert: {added} neu, {updated} aktualisiert, {skipped} übersprungen. Wettbewerberlinks bleiben erhalten.')
+            # Only persist changed Odoo fields; never touch existing offers or prices.
+            previous=st.session_state.products
+            compare_fields=['odoo_id','sku','ean','description','lbrixx_price','photo','brand_id','brand_name']
+            changed=[]
+            for idx,row in merged.iterrows():
+                if idx>=len(previous) or any(str(row[c])!=str(previous.at[idx,c]) for c in compare_fields):
+                    changed.append(idx)
+            if changed:
+                db_store.save_odoo_rows(DB_URL,merged.loc[changed].copy())
+                st.session_state.products=normalize(db_store.load(DB_URL))
+            st.success(f'Odoo-Synchronisierung: {added} neu, {updated} geprüft, {len(changed)} tatsächlich geändert, {skipped} übersprungen. Wettbewerberlinks und Preisverläufe unverändert.')
             st.rerun()
         except Exception as exc:
             st.error(f'Odoo-Import fehlgeschlagen: {exc}')

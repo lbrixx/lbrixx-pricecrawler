@@ -1,1 +1,1 @@
-V28.10.2: L9081 und LB9081 werden beim Abgleich als identische Lumibricks-SKU behandelt. F9031/FO9031 bleibt erhalten. Keine Datenbankmigration. Nur app.py und brickmo_index.py ersetzen. Bestehende Zuordnungen bleiben unverändert.
+V28.11.1: Odoo-Import speichert nur geänderte Produkt- und Markenfelder. Keine Schreibzugriffe auf Angebote, Preise oder Preisverlauf beim Odoo-Import. Keine neue SQL-Migration erforderlich. Auf GitHub app.py und db_store.py ersetzen. Zunächst mit 5 Testartikeln prüfen.

@@ -117,6 +117,47 @@ def save(url,df):
                         cur.execute('INSERT INTO public.price_history(offer_id,price,shipping_cost,availability,recorded_at) VALUES(%s,%s,%s,%s,%s)',(offer,price,shipping,av,stamp))
     return load(url)
 
+
+def save_odoo_rows(url, df):
+    # Persist only changed Odoo fields, without touching offers/prices/history.
+    if df.empty:
+        return
+    with connect(url) as conn, conn.cursor(row_factory=dict_row) as cur:
+        for _, row in df.iterrows():
+            v=lambda key: str(row.get(key,'') or '').strip()
+            oid=v('odoo_id')
+            if not oid.isdigit():
+                continue
+            pid=int(v('db_id')) if v('db_id').isdigit() else None
+            photo=v('photo') or None
+            if pid:
+                cur.execute('''UPDATE public.products SET manufacturer_sku=%s,ean=%s,
+                    name=%s,image_url=COALESCE(%s,image_url),updated_at=now()
+                    WHERE id=%s RETURNING id''',
+                    (v('sku') or None,v('ean') or None,v('description') or 'Unbenannter Artikel',photo,pid))
+                found=cur.fetchone()
+                if not found:
+                    raise ValueError(f'Produkt-ID {pid} existiert nicht mehr.')
+            else:
+                cur.execute('''INSERT INTO public.products
+                    (manufacturer_sku,ean,name,image_url,is_hidden,is_deleted)
+                    VALUES(%s,%s,%s,%s,false,false) RETURNING id''',
+                    (v('sku') or None,v('ean') or None,v('description') or 'Unbenannter Artikel',photo))
+                pid=cur.fetchone()['id']
+            cur.execute('''INSERT INTO public.odoo_products
+                (product_id,odoo_id,odoo_sku,odoo_ean,sale_price,brand_id,brand_name,last_import_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,now())
+                ON CONFLICT(product_id) DO UPDATE SET
+                odoo_id=excluded.odoo_id,odoo_sku=excluded.odoo_sku,
+                odoo_ean=excluded.odoo_ean,sale_price=excluded.sale_price,
+                brand_id=COALESCE(excluded.brand_id,public.odoo_products.brand_id),
+                brand_name=COALESCE(excluded.brand_name,public.odoo_products.brand_name),
+                updated_at=now()''',
+                (pid,int(oid),v('lbrixx_sku') or None,v('ean') or None,
+                 number(v('lbrixx_price')),
+                 int(v('brand_id')) if v('brand_id').isdigit() else None,
+                 v('brand_name') or None))
+
 def set_product_flag(url, product_id, field, enabled):
     """Single-row update; does not touch offers, images, prices or history."""
     columns={'hidden':'is_hidden','deleted':'is_deleted'}
