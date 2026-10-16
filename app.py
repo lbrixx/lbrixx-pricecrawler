@@ -7,6 +7,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 import db_store
 import quickmatch
+import brickmo_index
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
 DATA_FILE = 'lbrixx_products.csv'
@@ -360,8 +361,27 @@ with st.expander('➕ Lootstore-Artikel hinzufügen'):
             except Exception as exc:
                 st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
+with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
+    st.caption('Liest öffentliche Brickmo-Sitemaps ein und speichert erkannte Artikelnummern mit Produktlinks in Supabase. Die Indexabdeckung hängt von den tatsächlich bereitgestellten Sitemaps ab.')
+    if st.button('Brickmo-Katalog aktualisieren', key='brickmo_index_refresh'):
+        try:
+            with st.spinner('Brickmo-Sitemaps werden eingelesen (kann einige Minuten dauern)…'):
+                report=brickmo_index.refresh(DB_URL)
+            st.session_state.brickmo_index_report=report
+            if report['saved']:
+                st.success(f"{report['saved']} Produktlinks gespeichert oder aktualisiert; {report['sitemaps']} Sitemaps verarbeitet.")
+            else:
+                st.warning('Keine neuen SKU-Produktlinks eingelesen. Bitte die Diagnose prüfen. Der bestehende Index wurde nicht gelöscht.')
+        except Exception as exc:
+            st.error(f'Katalogaktualisierung fehlgeschlagen: {exc}')
+    report=st.session_state.get('brickmo_index_report')
+    if report:
+        if report['truncated']: st.info('Nur ein Teil der Sitemaps verarbeitet. Ein erneuter Lauf kann weitere Seiten erfassen.')
+        with st.expander('Katalog-Diagnose'):
+            for note in report['notes']: st.caption(note)
+
 with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
-    st.caption('Sucht anhand der Hersteller-SKU (alternativ EAN) bei Brickmo und Lootstore. Es werden nur Vorschläge angezeigt. Eine Zuordnung erfolgt ausschließlich nach deiner Bestätigung. Suchergebnisse können unvollständig sein.')
+    st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
     mc1,mc2=st.columns(2)
     with mc1:
         match_merchant=st.selectbox('Shop', ['Brickmo','Lootstore'], key='match_merchant')
@@ -383,7 +403,10 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
         with st.spinner('Shop-Suchergebnisse werden geprüft…'):
             for n,(_,item) in enumerate(subset.iterrows(),1):
                 try:
-                    matches,issue=quickmatch.search(item.to_dict(),match_merchant)
+                    if match_merchant=='Brickmo':
+                        matches,issue=brickmo_index.lookup(DB_URL,item.get('sku',''))
+                    else:
+                        matches,issue=quickmatch.search(item.to_dict(),match_merchant)
                     if issue: issues.append(f"{item['sku']}: {issue}")
                     for candidate in matches:
                         candidate.update({'product_id':str(item['db_id']),'sku':str(item['sku']),'product_name':str(item['description']),'merchant':match_merchant})
@@ -398,7 +421,7 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
     if st.session_state.get('match_shop')==match_merchant:
         suggestions=st.session_state.get('match_suggestions',[])
         if suggestions:
-            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen. Niedrige Übereinstimmung bedeutet: nur ein Suchkandidat.')
+            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen.')
             for i,candidate in enumerate(suggestions):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['sku'])} – {html.escape(candidate['product_name'][:90])}**")
@@ -416,7 +439,7 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
                             st.rerun()
                         except Exception as exc: st.error(f'Zuordnung fehlgeschlagen: {exc}')
         elif 'match_suggestions' in st.session_state:
-            st.warning('Keine Produktvorschläge aus der Shop-Suche. Details unter Suchdiagnosen.')
+            st.warning('Keine hinreichend eindeutigen Treffer gefunden. Es wurde nichts zugeordnet.')
         issues=st.session_state.get('match_issues',[])
         if issues:
             with st.expander(f'{len(issues)} Suchdiagnosen (auch ohne Treffer)', expanded=not bool(suggestions)):
