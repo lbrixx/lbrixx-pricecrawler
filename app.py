@@ -67,6 +67,19 @@ def fmt(x):
     n=euro_num(x)
     return f'{n:,.2f} €'.replace(',','X').replace('.',',').replace('X','.') if n is not None else '–'
 
+def brickmo_match_keys(product):
+    """Primary Odoo SKU plus explicit parenthesized manufacturer codes in description.
+
+    Never modify the stored Odoo SKU. Only use conservative code-shaped aliases.
+    """
+    values = [str(product.get('sku', '') or '').strip()]
+    description = str(product.get('description', '') or '')
+    # e.g. '15002 (F9031) Book Cafe'; accept FO/F aliases and other alphanumeric
+    # manufacturer codes only when explicitly parenthesized.
+    for raw in re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8})\)', description):
+        values.append(raw.replace(' ', '').replace('-', ''))
+    return list(dict.fromkeys(brickmo_index.normalized_sku(x) for x in values if x))
+
 def valid_url(url):
     p=urlparse(url.strip())
     return p.scheme=='https' and p.hostname in ('brickmo.com','www.brickmo.com')
@@ -465,15 +478,19 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
             try:
                 products_to_match = st.session_state.products.copy()
                 products_to_match = products_to_match[(products_to_match['deleted']!='1') & (products_to_match['brickmo_url'].astype(str).str.strip()=='')]
-                indexed = brickmo_index.batch_match_skus(DB_URL, products_to_match['sku'].tolist())
+                indexed = brickmo_index.batch_match_skus(DB_URL, [key for _, p in products_to_match.iterrows() for key in brickmo_match_keys(p)])
                 comparison = []
                 for _, product in products_to_match.iterrows():
-                    key = brickmo_index.normalized_sku(product['sku'])
-                    for match in indexed.get(key, []):
-                        comparison.append({'db_id':str(product['db_id']), 'SKU':str(product['sku']),
-                            'LBrixx-Artikel':str(product['description']),
-                            'Brickmo-Produkt':match['product_title'], 'Brickmo-Link':match['product_url'],
-                            'Quelle':match['source_sitemap']})
+                    seen_urls = set()
+                    for key in brickmo_match_keys(product):
+                        for match in indexed.get(key, []):
+                            if match['product_url'] in seen_urls:
+                                continue
+                            seen_urls.add(match['product_url'])
+                            comparison.append({'db_id':str(product['db_id']), 'SKU':str(product['sku']),
+                                'LBrixx-Artikel':str(product['description']),
+                                'Brickmo-Produkt':match['product_title'], 'Brickmo-Link':match['product_url'],
+                                'Quelle':match['source_sitemap'], 'Treffer-SKU':key})
                 st.session_state.full_category_comparison = comparison
             except Exception as exc:
                 st.error(f'Abgleich fehlgeschlagen: {exc}')
@@ -483,6 +500,7 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
             for i, candidate in enumerate(comparison):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")
+                    st.caption(f"Abgleich über Hersteller-SKU: {html.escape(candidate.get('Treffer-SKU', candidate['SKU']))}")
                     st.markdown(
                         '<div style="font-size:17px;font-weight:600;color:#111111;line-height:1.45;">'
                         f"Brickmo: {html.escape(str(candidate['Brickmo-Produkt']))}"
@@ -547,7 +565,15 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
             for n,(_,item) in enumerate(subset.iterrows(),1):
                 try:
                     if match_merchant=='Brickmo':
-                        matches,issue=brickmo_index.lookup(DB_URL,item.get('sku',''))
+                        matches=[]; diagnostics=[]; seen_urls=set()
+                        for search_key in brickmo_match_keys(item):
+                            found,diagnostic=brickmo_index.lookup(DB_URL,search_key)
+                            diagnostics.append(diagnostic)
+                            for found_match in found:
+                                if found_match['url'] not in seen_urls:
+                                    seen_urls.add(found_match['url'])
+                                    matches.append(found_match)
+                        issue=' · '.join(diagnostics)
                     else:
                         matches,issue=quickmatch.search(item.to_dict(),match_merchant)
                     if issue: issues.append(f"{item['sku']}: {issue}")
