@@ -981,7 +981,8 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             suggestions=[]
             missing=[]
             for _,product in lumi_products.iterrows():
-                if str(product.lumibricks_url).strip(): continue
+                if str(product.lumibricks_url).strip():
+                    continue
                 keys=list(dict.fromkeys(
                     lumibricks_store.sku_key(candidate)
                     for candidate in brickmo_match_keys(product)
@@ -992,42 +993,70 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                     hit=matches[0]
                     suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
                 elif not matches:
-                    # Prioritize explicit old F/FO manufacturer codes, e.g. 15002 (F9031).
-                    codes=re.findall(r'\(([A-Za-z]{1,3}[- ]?\d{3,8})\)',str(product.description))
-                    codes=[code.replace(' ','').replace('-','') for code in codes if re.fullmatch(r'F(?:O)?\d{3,8}',code.replace(' ','').replace('-',''),re.I)]
-                    if codes: missing.append((product,codes))
-            # The public Shopify catalog may omit products. Search exact legacy
-            # manufacturer SKUs only, and verify them against product variant SKUs.
-            checked=0; targeted_hits=0; search_cache={}; sku_diagnostics=[]
+                    # All unlinked Lumibricks products, not just legacy F-SKUs.
+                    # Prioritize explicitly supplied alternative manufacturer codes.
+                    description=str(product.description or '')
+                    explicit=[x.replace(' ','').replace('-','') for x in
+                              re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8}|\d{4,8})\)',description)]
+                    primary=str(product.sku or '').strip()
+                    candidates=[]; seen_keys=set()
+                    for candidate in explicit+[primary]:
+                        key=lumibricks_store.sku_key(candidate)
+                        if not key or key in seen_keys or not re.fullmatch(r'[A-Z]{0,6}\d{3,8}',key):
+                            continue
+                        seen_keys.add(key)
+                        candidates.append(candidate)
+                    if candidates:
+                        missing.append((product,candidates))
+            # A single click checks all unlinked products. Keep progress and results
+            # in the Streamlit session so rate-limit interruptions can be resumed.
+            checked=0; targeted_hits=0; sku_diagnostics=[]
+            search_cache=st.session_state.setdefault('lumi_sku_search_cache',{})
+            import requests as _requests
+            search_session=_requests.Session()
+            stopped_reason=''
             if missing:
-                progress=st.progress(0,text=f'Gezielte F-SKU-Nachsuche: 0/{len(missing)} Artikel')
-                import requests as _requests
-                search_session=_requests.Session()
+                progress=st.progress(0,text=f'Gezielte SKU-Nachsuche: 0/{len(missing)} Artikel')
                 try:
+                    last_request=0.0
                     for i,(product,codes) in enumerate(missing):
                         matches=[]
                         for code in codes:
-                            if code not in search_cache:
-                                if search_cache: time.sleep(1.5)
-                                search_cache[code]=lumibricks_store.search_exact_sku(code,search_session)
-                            hit,reason=search_cache[code]
+                            key=lumibricks_store.sku_key(code)
+                            if key not in search_cache:
+                                # At most one targeted lookup every 2 seconds.
+                                delay=2.0-(time.monotonic()-last_request)
+                                if delay>0: time.sleep(delay)
+                                last_request=time.monotonic()
+                                hit,reason=lumibricks_store.search_exact_sku(code,search_session)
+                                search_cache[key]=(hit,reason)
+                            hit,reason=search_cache[key]
                             sku_diagnostics.append(f'{product.sku} / {code}: {reason}')
-                            if hit: matches.append(hit)
+                            if hit:
+                                matches.append(hit)
+                                # Exact verified alternative SKU is sufficient;
+                                # don't spend more requests on its primary alias.
+                                break
                         checked+=1
                         urls={hit['url'] for hit in matches}
                         if len(urls)==1:
                             hit=matches[0]
                             suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
                             targeted_hits+=1
-                        progress.progress((i+1)/len(missing),text=f'Gezielte F-SKU-Nachsuche: {i+1}/{len(missing)} Artikel · {targeted_hits} Treffer')
+                        progress.progress((i+1)/len(missing),text=f'Gezielte SKU-Nachsuche: {i+1}/{len(missing)} Artikel · {targeted_hits} Treffer')
+                        # Save partial results after each completed product.
+                        st.session_state['lumi_suggestions']=suggestions.copy()
                 except Exception as exc:
-                    diagnostics.append(f'Gezielte Nachsuche unterbrochen nach {checked} Artikeln: {exc}')
+                    stopped_reason=str(exc)
+                    diagnostics.append(f'Gezielte Nachsuche unterbrochen nach {checked} Artikeln: {exc}. Beim nächsten Klick wird mit zwischengespeicherten SKU-Ergebnissen fortgesetzt.')
                 finally:
                     search_session.close()
-            diagnostics.append(f'Gezielte F-SKU-Nachsuche: {checked}/{len(missing)} Artikel geprüft, {targeted_hits} zusätzliche Treffer')
+            diagnostics.append(f'Gezielte SKU-Nachsuche: {checked}/{len(missing)} noch nicht zugeordnete Artikel geprüft, {targeted_hits} zusätzliche Treffer')
             if sku_diagnostics:
+                st.session_state['lumi_sku_diagnostics']=sku_diagnostics
+            if st.session_state.get('lumi_sku_diagnostics'):
                 with st.expander('🔬 Diagnose der einzelnen SKU-Prüfungen', expanded=False):
-                    for line in sku_diagnostics: st.text(line)
+                    for line in st.session_state['lumi_sku_diagnostics']: st.text(line)
             st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)
