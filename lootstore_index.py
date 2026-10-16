@@ -107,8 +107,15 @@ def index_collection(db_url, max_pages=10, timeout=20):
     return {'saved':saved, 'pages_checked':checked, 'products_seen':product_count,
             'complete':complete, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
 
+def match_key(s):
+    key = norm(s)
+    for prefix in ('PANTASY', 'PAN'):
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return key[len(prefix):]
+    return key
+
 def batch_match_skus(db_url, skus):
-    keys = sorted({norm(s) for s in skus if norm(s)})
+    keys = sorted({match_key(s) for s in skus if match_key(s)})
     if not keys:
         return {}
     with psycopg.connect(db_url, connect_timeout=12, row_factory=dict_row) as conn:
@@ -117,9 +124,11 @@ def batch_match_skus(db_url, skus):
             if not cur.fetchone()['table_name']:
                 return {}
             cur.execute('''SELECT product_url,manufacturer_sku,product_title,brand_name
-                FROM public.lootstore_catalog WHERE manufacturer_sku = ANY(%s)''', (keys,))
+                FROM public.lootstore_catalog WHERE lower(regexp_replace(brand_name, '[^a-zA-Z0-9]', '', 'g')) = 'pantasy' ''')
             rows = cur.fetchall()
     result = {key:[] for key in keys}
     for row in rows:
-        result[row['manufacturer_sku']].append(dict(row))
+        key = match_key(row['manufacturer_sku'])
+        if key in result:
+            result[key].append(dict(row))
     return result

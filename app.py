@@ -240,7 +240,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.23 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.24 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -487,7 +487,7 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.23)', expanded=False):
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.24)', expanded=False):
     st.caption('Liest die Shopify-Produktliste der gesamten Lootstore-Klemmbaustein-Kategorie. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
     if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
         try:
@@ -515,7 +515,7 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.23)', expande
             for _, product in own.iterrows():
                 seen = set()
                 for key in brickmo_match_keys(product):
-                    for match in indexed.get(lootstore_index.norm(key), []):
+                    for match in indexed.get(lootstore_index.match_key(key), []):
                         if lootstore_index.brand(match['brand_name']) != 'pantasy':
                             continue
                         if match['product_url'] in seen:
@@ -525,8 +525,20 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.23)', expande
                             'description':str(product['description']), 'title':match['product_title'],
                             'url':match['product_url'], 'matched_sku':key})
             st.session_state.lootstore_comparison = candidates
+            matched_ids = {c['db_id'] for c in candidates}
+            st.session_state.lootstore_match_diagnostics = {
+                'total': len(own), 'matched': len(matched_ids),
+                'unmatched': [str(p['sku']) for _, p in own.iterrows()
+                              if str(p['db_id']) not in matched_ids][:30],
+            }
         except Exception as exc:
             st.error(f'Lootstore-Abgleich fehlgeschlagen: {exc}')
+    diagnostics = st.session_state.get('lootstore_match_diagnostics')
+    if diagnostics:
+        with st.expander('Pantasy-Abgleichdiagnose'):
+            st.write(f"{diagnostics['total']} offene Pantasy-Artikel · {diagnostics['matched']} Artikel mit Treffer")
+            if diagnostics['unmatched']:
+                st.caption('Ohne Treffer (max. 30): ' + ', '.join(diagnostics['unmatched']))
     loot_candidates = st.session_state.get('lootstore_comparison')
     if loot_candidates is not None:
         st.write(f'{len(loot_candidates)} Pantasy-Zuordnungsvorschläge – einzeln bestätigen.')
