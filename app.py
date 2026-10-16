@@ -9,7 +9,7 @@ import db_store
 import quickmatch
 import brickmo_index
 
-st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='🧱')
+st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='lbrixx_logo.png')
 DATA_FILE = 'lbrixx_products.csv'
 COLUMNS = ['db_id','ean','odoo_id','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error']
 SEEDS = [
@@ -183,7 +183,8 @@ if 'products' not in st.session_state:
     except Exception as e:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
-st.title('🧱 LBrixx – Preisvergleich V28 · PostgreSQL')
+st.image('lbrixx_logo.png', width=190)
+st.title('LBrixx – Preisvergleich V28.9 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -425,10 +426,10 @@ with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False
         with st.expander('Kategoriesuche – Diagnose',expanded=True):
             for note in category_report['notes']: st.caption(note)
 
-with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expanded=False):
+with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expanded=False):
     st.caption('Erkennt die Anzahl der Kategorieseiten automatisch, erfasst eindeutige Produktlinks und speichert klar erkennbare Artikelnummern im Supabase-Index. Produktzuordnungen werden nicht verändert.')
     full_category_url = st.text_input('Kategorie für vollständigen Index', value=brickmo_index.CATEGORY_START, key='full_category_url')
-    st.caption('Sicherheitsgrenze: maximal 60 Seiten pro Durchlauf. Nur eindeutig aus URLs erkennbare SKUs werden indexiert.')
+    st.caption('Sicherheitsgrenze: maximal 60 Seiten. Herstellerübergreifende SKU-Erkennung aus URLs; alle Vorschläge bleiben unbestätigt.')
     if st.button('Kategorie vollständig einlesen', key='full_category_run'):
         try:
             with st.spinner('Kategorieseiten werden eingelesen und der Index wird aktualisiert…'):
@@ -469,7 +470,7 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expan
             for i, candidate in enumerate(comparison):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")
-                    st.caption(f"Brickmo: {candidate['Brickmo-Produkt']} · Quelle: {candidate['Quelle']}")
+                    st.caption(f"Brickmo: {candidate['Brickmo-Produkt']} · Quelle: {candidate['Quelle']} · Bitte Hersteller und SKU vor Bestätigung vergleichen.")
                     st.markdown(f"[Brickmo-Produkt prüfen]({candidate['Brickmo-Link']})")
                     if st.button('✓ Zuordnung bestätigen', key=f'category_confirm_{candidate["db_id"]}_{i}'):
                         try:
@@ -486,7 +487,7 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expan
                 st.info('Keine offenen Vorschläge mehr vorhanden.')
     st.divider()
     st.markdown('**Optionale SKU-Ergänzung aus Produktdetails**')
-    st.caption('Liest nur eine begrenzte Anzahl bereits indexierter Produktseiten ohne SKU nach. '
+    st.caption('Liest begrenzt Produktseiten ohne SKU nach und erkennt auch numerische Artikelnummern. '
                'Bereits zugeordnete LBrixx-Artikel werden nicht verändert. Bitte nur gelegentlich starten.')
     detail_limit = st.selectbox('Maximale Produktseiten je Durchlauf', [10, 25, 50], key='detail_enrich_limit')
     if st.button('Fehlende Artikelnummern nachladen', key='category_enrich_run'):

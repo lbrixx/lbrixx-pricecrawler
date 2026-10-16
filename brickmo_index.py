@@ -296,18 +296,32 @@ def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8
 
 # V28.7: Category-wide index; no modification of existing LBrixx offers.
 def _category_sku_from_url(url):
-    """Only return a SKU if it is explicitly encoded in a product slug.
+    """Conservative brand-aware SKU extraction from Brickmo product slugs.
 
-    Unknown brands remain unindexed rather than receiving guessed identifiers.
+    Do not infer from Brickmo's internal numeric URL ID. Numbers alone are
+    accepted only when the slug explicitly names a supported manufacturer.
+    All URL-derived values remain *unconfirmed* until a human reviews them.
     """
-    path = unquote(urlparse(url).path).upper()
-    found = re.findall(r'(?<![A-Z0-9])FO?\d{4,}(?![A-Z0-9])', path)
-    if found:
-        return normalized_sku(found[-1])
-    # COBI is represented by a brand prefix and numeric SKU in Brickmo slugs.
-    found = re.findall(r'(?<![A-Z0-9])COBI[-_ ](\d{3,6})(?![A-Z0-9])', path)
-    if found:
-        return 'COBI-' + found[-1]
+    path = unquote(urlparse(url).path).lower().rstrip('/')
+    slug = path.rsplit('/', 1)[-1]
+    parts = [x for x in re.split(r'[-_]+', slug) if x]
+    if not parts:
+        return ''
+    # FunWhole / LumiBricks: FO9054, F9054, FO-9054
+    if 'funwhole' in parts or 'lumibricks' in parts:
+        for match in re.finditer(r'(?<![a-z0-9])(?:fo?-?)(\d{4,5})(?![a-z0-9])', slug):
+            return 'FO' + match.group(1)
+        # LumiBricks also uses numeric manufacturer SKUs, e.g. 18010, 17011.
+        # Require the identifier to be the final slug token to avoid model numbers in titles.
+        m = re.search(r'(?:^|[-_])(lb\d{3,6}|\d{4,6})$', slug)
+        if m:
+            return m.group(1).upper()
+    # Other explicitly identified manufacturers: match trailing model number.
+    brands = ('wange', 'mould', 'mouldking', 'cada', 'cobi', 'pantasy', 'reobrix')
+    if any(token in parts for token in brands):
+        m = re.search(r'(?:^|[-_])([a-z]{0,3}\d{3,7}[a-z]?)$', slug)
+        if m:
+            return m.group(1).upper()
     return ''
 
 
@@ -391,7 +405,8 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15
                     (product_url,manufacturer_sku,product_title,source_sitemap,indexed_at)
                     VALUES (%s,%s,%s,%s,now())
                     ON CONFLICT(product_url) DO UPDATE SET
-                    manufacturer_sku=excluded.manufacturer_sku,
+                    manufacturer_sku=CASE WHEN public.brickmo_catalog.source_sitemap LIKE '%bestätigt%'
+                        THEN public.brickmo_catalog.manufacturer_sku ELSE excluded.manufacturer_sku END,
                     product_title=excluded.product_title,
                     source_sitemap=CASE
                         WHEN public.brickmo_catalog.source_sitemap='Brickmo-Kategoriesuche'
@@ -473,14 +488,14 @@ def enrich_category_skus(db_url, category_url, limit=25, timeout=15):
                 notes.append(f'{u}: HTTP {r.status_code}')
                 continue
             soup = BeautifulSoup(r.text, 'html.parser')
-            # SKU must be labelled in the main product detail section.
+            # Check only the main product details, never related-product listings.
             main = soup.select_one('.product--details') or soup.select_one('.product--detail') or soup.select_one('main') or soup
             content = main.get_text(' ', strip=True)
-            found = re.search(r'(?:Produkt-Nr\.|Artikel-Nr\.|Artikelnummer|Produktnummer)\s*:?\s*(FO?\d{4,})\b', content, re.I)
+            found = re.search(r'(?:Produkt-Nr\.|Artikel-Nr\.|Artikelnummer|Produktnummer)\s*:?\s*([A-Z]{0,4}[- ]?\d{3,7}[A-Z]?)\b', content, re.I)
             if not found:
-                notes.append(f'{u}: keine eindeutig beschriftete FO-Artikelnummer')
+                notes.append(f'{u}: keine eindeutig beschriftete Artikelnummer')
                 continue
-            sku = normalized_sku(found.group(1))
+            sku = normalized_sku(found.group(1).replace(' ', '').replace('-', ''))
             title = soup.select_one('h1')
             title = title.get_text(' ', strip=True) if title else u.rsplit('/', 1)[-1].replace('-', ' ')
             records.append((u, sku, title, 'Brickmo-Produktdetails (SKU bestätigt)'))
