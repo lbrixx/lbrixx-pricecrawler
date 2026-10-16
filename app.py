@@ -415,7 +415,7 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
             st.error(f'Odoo-Import fehlgeschlagen: {exc}')
 
 
-st.caption('Brickmo und Lootstore · Einzelartikelvergleich nach Deutschland · Versandkosten je Händler')
+st.caption('Brickmo und Lootstore · Einzelartikelvergleich nach Deutschland · Gesamtpreise inklusive Versand')
 st.success('🗄️ PostgreSQL verbunden – Produktdaten werden in Supabase gespeichert.')
 
 with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
@@ -488,7 +488,7 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.29)', expanded=False):
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.30)', expanded=False):
     st.caption('Schonende Pantasy-Indexierung über die Lootstore-Produktsitemap: höchstens 20 Produktprüfungen je Durchlauf, mindestens 2 Sekunden Abstand und sofortiger Stopp bei HTTP 429. Fortschritt wird in PostgreSQL gespeichert. Keine automatische Zuordnung.')
     if st.button('Pantasy-Sitemap: nächste 20 Produkte prüfen', key='lootstore_collection_index'):
         try:
@@ -1063,13 +1063,15 @@ else:
     def price_cell(row,provider):
         if provider=='brickmo':
             status=str(row.availability).strip().lower()
-            price=fmt(row.brickmo_price)
+            price=fmt(row.total)
+            shipping=fmt(row.shipping)
             url=str(row.brickmo_url).strip()
             timestamp=row.last_checked
             valid=valid_url(url)
         else:
             status=str(row.lootstore_availability).strip().lower()
-            price=fmt(row.lootstore_price)
+            price=fmt(row.lootstore_total)
+            shipping=fmt(row.lootstore_shipping)
             url=str(row.lootstore_url).strip()
             timestamp=row.lootstore_checked
             valid=valid_lootstore_url(url)
@@ -1084,7 +1086,8 @@ else:
         err=str(row.error if provider=='brickmo' else row.lootstore_error).strip()
         stamp=cell(short_date(timestamp))
         label=('❗ ' if err else '✓ ' if timestamp else '● ')+label
-        return f'<td class="shop-price {css_class}">{label}<div class="timestamp">{stamp}</div></td>'
+        shipping_label = f'<div class="shipping-note">inkl. {cell(shipping)} Versand</div>' if shipping != '–' else ''
+        return f'<td class="shop-price {css_class}">{label}{shipping_label}<div class="timestamp">{stamp}</div></td>'
 
     rows=[]
     for row_idx, r in df_display.iterrows():
@@ -1093,10 +1096,6 @@ else:
         fallback=str(r.brickmo_photo).strip()
         chosen=photo if photo.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else fallback
         img=f'<img src="{cell(chosen)}" alt="Produktfoto" loading="lazy">' if chosen.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else '–'
-        a=euro_num(r.lbrixx_price); b=euro_num(r.total)
-        diff=fmt(round(a-b,2)) if a is not None and b is not None else '–'
-        c=euro_num(r.lootstore_total)
-        loot_diff=fmt(round(a-c,2)) if a is not None and c is not None else '–'
         rows.append('<tr>' +
             f'<td class="edit"><div class="action-group"><a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
             f'<td class="photo">{img}</td>' +
@@ -1107,13 +1106,7 @@ else:
             f'<td class="description">{cell(r.description)}</td>' +
             f'<td>{cell(fmt(r.lbrixx_price))}</td>' +
             price_cell(r,'brickmo') +
-            f'<td>{cell(fmt(r.shipping))}</td>' +
-            f'<td>{cell(fmt(r.total))}</td>' +
             price_cell(r,'lootstore') +
-            f'<td>{cell(fmt(r.lootstore_shipping))}</td>' +
-            f'<td>{cell(fmt(r.lootstore_total))}</td>' +
-            f'<td>{cell(diff)}</td>' +
-            f'<td>{cell(loot_diff)}</td>' +
             '</tr>')
     table_css = """
     <style>
@@ -1144,12 +1137,13 @@ else:
     .lbrixx-table .shop-price.unknown {background:#006CB7;color:#fff !important;}
     .lbrixx-table .shop-price.unavailable {background:#D01012;color:#fff !important;}
     .lbrixx-table .shop-price a {color:inherit;text-decoration:underline;text-underline-offset:3px;}
+    .lbrixx-table .shop-price .shipping-note {font-size:10px;font-weight:500;margin-top:3px;opacity:.95;}
     .lbrixx-table .shop-price .timestamp {font-size:10px;font-weight:400;margin-top:2px;opacity:.9;}
     .lbrixx-table th a:hover {text-decoration:underline!important;}
     </style>
     """
-    headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Lootstore-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Differenz LBrixx − Lootstore']
-    sort_fields=['','', 'sku','brand_name','ean','lbrixx_sku','description','lbrixx_price','brickmo_price','shipping','total','lootstore_price','lootstore_shipping','lootstore_total','difference','loot_difference']
+    headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis inkl. Versand ↗','Lootstore-Preis inkl. Versand ↗']
+    sort_fields=['','', 'sku','brand_name','ean','lbrixx_sku','description','lbrixx_price','total','lootstore_total']
     def heading(h,k):
         if not k: return f'<th>{cell(h)}</th>'
         next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
