@@ -321,38 +321,26 @@ def catalog_brand(source):
     return m.group(1).strip() if m else ''
 
 def match_catalog_brand(match):
-    """Resolve a verified index-category brand or an explicit brand in product URL.
+    """Only manufacturer-category provenance authorizes matching.
 
-    Generic topic categories (e.g. Architektur) do not establish a brand.
-    Never infer a manufacturer solely from a matching numeric SKU.
+    Old topic-category, sitemap and manual-index records stay in the database,
+    but are ineligible for automatic suggestions. Never trust a brand inferred
+    from a product URL without manufacturer-category provenance.
     """
-    source_brand = catalog_brand(match.get('source_sitemap', ''))
-    url_path = unquote(urlparse(match.get('product_url', '')).path).lower()
-    slug = url_path.rstrip('/').rsplit('/', 1)[-1]
-    tokens = set(re.split(r'[^a-z0-9]+', slug))
-    explicit = ''
-    if 'lumibricks' in tokens:
-        explicit = 'Lumibricks'
-    elif 'funwhole' in tokens:
-        explicit = 'FunWhole'
-    elif 'pantasy' in tokens:
-        explicit = 'Pantasy'
-    elif 'reobrix' in tokens:
-        explicit = 'Reobrix'
-    elif 'wange' in tokens:
-        explicit = 'Wange'
-    elif 'mouldking' in tokens or ('mould' in tokens and 'king' in tokens):
-        explicit = 'Mould King'
-    elif 'cada' in tokens:
-        explicit = 'CaDA'
-    elif 'mattel' in tokens and ('brick' in tokens or 'hot' in tokens):
-        explicit = 'Mattel Brick Shop'
-    elif 'happy' in tokens and 'build' in tokens:
-        explicit = 'Happy Build'
-    # Conflicting provenance is unsafe: do not suggest the match.
-    if source_brand and explicit and brand_key(source_brand) != brand_key(explicit):
+    source = str(match.get('source_sitemap', '') or '')
+    if not source.startswith('Brickmo-Kategorie:') and not source.startswith('Brickmo-Produktdetails'):
         return ''
-    return source_brand or explicit
+    source_brand = catalog_brand(source)
+    if brand_key(source_brand) not in {brand_key(v) for v in BRAND_CATEGORY_PATHS.values()}:
+        return ''
+    # FunWhole's manufacturer category also lists LumiBricks products.
+    # Only an explicit LumiBricks token in the product slug can distinguish them.
+    if brand_key(source_brand) == 'funwhole':
+        slug = unquote(urlparse(match.get('product_url', '')).path).lower().rstrip('/').rsplit('/', 1)[-1]
+        tokens = set(re.split(r'[^a-z0-9]+', slug))
+        if 'lumibricks' in tokens:
+            return 'Lumibricks'
+    return source_brand
 
 
 def brand_key(value):
@@ -429,6 +417,8 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=250, timeout=1
     parsed = urlparse(category_url)
     if parsed.scheme != 'https' or parsed.hostname not in ('www.brickmo.com', 'brickmo.com'):
         raise ValueError('Nur HTTPS-Kategorieseiten von brickmo.com erlaubt.')
+    if not category_brand(category_url):
+        raise ValueError('Nur hinterlegte Herstellerkategorien dürfen vollständig indexiert werden.')
     base = urlunparse(('https', 'www.brickmo.com', parsed.path.rstrip('/') + '/', '', '', ''))
     cap = max(1, min(int(max_pages), 250))
     session = requests.Session()

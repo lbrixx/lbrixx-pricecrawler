@@ -515,35 +515,9 @@ with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
             else:
                 st.info('Keine Beispiel-URLs verfügbar. Bitte den Brickmo-Katalog erneut aktualisieren.')
 
-with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False):
-    st.caption('Gezielter Test einer Brickmo-Kategorieseite. Nur exakte SKU-Kandidaten werden auf der Produktseite überprüft und anschließend im Index gespeichert. Keine automatische Produktzuordnung.')
-    category_sku=st.text_input('Herstellerartikelnummer für Kategoriesuche', value='FO9054', key='category_sku')
-    category_url=st.text_input('Brickmo-Kategorie', value=brickmo_index.CATEGORY_START, key='category_url')
-    category_pages=st.selectbox('Maximal zu prüfende Kategorieseiten', [2,5,8,12,20],index=1,key='category_pages')
-    if st.button('Kategoriesuche starten',key='category_search'):
-        try:
-            with st.spinner('Kategorieseiten und exakte SKU-Kandidaten werden geprüft…'):
-                st.session_state.category_report=brickmo_index.crawl_category_for_sku(
-                    DB_URL,category_sku,category_url,max_pages=category_pages)
-        except Exception as exc:
-            st.error(f'Kategoriesuche fehlgeschlagen: {exc}')
-    category_report=st.session_state.get('category_report')
-    if category_report:
-        st.write(f"{category_report['pages']} Seiten geprüft · {category_report['links']} Produktlinks gelesen · {category_report['candidates']} SKU-Kandidaten · {len(category_report['matches'])} bestätigte Treffer")
-        if category_report['matches']:
-            for match in category_report['matches']:
-                st.success(f"{match['title']} – SKU auf Produktseite bestätigt")
-                st.link_button('Brickmo-Produkt öffnen',match['url'])
-            st.info('Die bestätigten Treffer sind jetzt im Brickmo-Index gespeichert. Bitte die Zuordnung anschließend über die Schnellzuordnung selbst bestätigen.')
-        else:
-            st.warning('Kein verifizierter Treffer in den geprüften Kategorieseiten. Dies bedeutet nicht, dass der Artikel nicht existiert.')
-        with st.expander('Kategoriesuche – Diagnose',expanded=True):
-            for note in category_report['notes']: st.caption(note)
-
-with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expanded=False):
-    st.caption('Erkennt die Anzahl der Kategorieseiten automatisch, erfasst eindeutige Produktlinks und speichert klar erkennbare Artikelnummern im Supabase-Index. Produktzuordnungen werden nicht verändert.')
-    full_category_url = st.text_input('Kategorie für vollständigen Index', value=brickmo_index.CATEGORY_START, key='full_category_url')
-    st.caption('Sicherheitsgrenze: maximal 250 Seiten. Herstellerübergreifende SKU-Erkennung aus URLs; alle Vorschläge bleiben unbestätigt.')
+with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.17)', expanded=False):
+    st.caption('Ausschließlich offizielle Herstellerkategorien. Themenwelten und freie Kategorie-URLs sind für Indexierung und Vorschläge deaktiviert. Bestehende Zuordnungen bleiben erhalten.')
+    st.caption('Maximal 250 Seiten je Hersteller; Vorschläge müssen einzeln bestätigt werden.')
     # V28.10: Nur FunWhole als zusätzliche Herstellerquelle; keine anderen Themenwelten.
     funwhole_url = 'https://www.brickmo.com/weitere-marken/funwhole/'
     st.markdown('**Neu: Herstellerindex FunWhole**')
@@ -633,14 +607,6 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
                 st.session_state.full_category_comparison = None
         except Exception as exc:
             st.error(f'CaDA-Indexierung fehlgeschlagen: {exc}')
-    st.divider()
-    st.caption('Weitere Kategorie manuell indexieren (bisherige Funktion):')
-    if st.button('Kategorie vollständig einlesen', key='full_category_run'):
-        try:
-            with st.spinner('Kategorieseiten werden eingelesen und der Index wird aktualisiert…'):
-                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, full_category_url)
-        except Exception as exc:
-            st.error(f'Katalogimport fehlgeschlagen: {exc}')
     full_report = st.session_state.get('full_category_report')
     if full_report:
         st.write(f"{full_report['pages_checked']} von {full_report['pages_detected']} erkannten Seiten geprüft · {full_report['links_found']} eindeutige Produktlinks · {full_report['sku_links']} SKU-Links gespeichert")
@@ -689,7 +655,7 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
         if comparison is not None:
             st.write(f'{len(comparison)} mögliche Zuordnungsvorschläge – nur nach Einzelbestätigung gespeichert.')
             rejected_brand, unknown_brand = st.session_state.get('full_category_diagnostics', (0, 0))
-            st.caption(f'Markenfilter: {rejected_brand} markenfremde Treffer und {unknown_brand} Treffer ohne gesicherte Markeninformation ausgeschlossen. Für ältere Indexeinträge bitte die jeweilige Herstellerkategorie erneut indexieren.')
+            st.caption(f'Markenfilter: {rejected_brand} markenfremde Treffer und {unknown_brand} Treffer ohne gesicherte Herstellerquelle ausgeschlossen. Ältere Themenwelt-Einträge werden nicht mehr als Vorschläge berücksichtigt. Herstellerkategorien bei Bedarf neu indexieren.')
             for i, candidate in enumerate(comparison):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")
