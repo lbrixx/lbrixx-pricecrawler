@@ -1,6 +1,6 @@
 """Shop search with explicit human confirmation. Exact SKU matches are preferred."""
 import re
-from urllib.parse import urljoin, urlparse, quote
+from urllib.parse import urljoin, urlparse, quote, parse_qs
 from difflib import SequenceMatcher
 import requests
 from bs4 import BeautifulSoup
@@ -30,8 +30,10 @@ def sku_variants(sku):
 def score(row,title,link):
     variants=sku_variants(row.get('sku',''))
     ean=re.sub(r'\D','',str(row.get('ean','')))
-    path=urlparse(link).path
-    hay=(str(title)+' '+path.replace('-',' ')).lower()
+    parsed=urlparse(link)
+    path=parsed.path
+    query_number=' '.join(parse_qs(parsed.query).get('number', []))
+    hay=(str(title)+' '+path.replace('-',' ')+' '+query_number).lower()
     exact=any(re.search(r'(?<![a-z0-9])'+re.escape(v.lower())+r'(?![a-z0-9])',hay) for v in variants if len(v)>=4)
     ean_match=bool(len(ean) in (8,12,13,14) and re.search(r'(?<!\d)'+ean+r'(?!\d)',hay))
     a=tokens(row.get('description','')); b=tokens(title+' '+path.replace('-',' '))
@@ -54,6 +56,8 @@ def search(row,merchant,timeout=12):
         link=candidate_url(merchant,urljoin(base,str(link)))
         if not link:return False
         points,reason=score(row,str(title or ''),link)
+        # Reject unrelated products even if their names contain generic words.
+        if points < 75: return False
         if link not in found or points>found[link]['score']:
             found[link]={'url':link,'title':str(title or link.rsplit('/',1)[-1])[:160], 'score':points,'reason':reason,'source':source}
         return True
@@ -67,7 +71,7 @@ def search(row,merchant,timeout=12):
                     for p in products:add(p.get('url',''),p.get('title',''),'Shopify')
                 else:notes.append(f'{term}: Shopify HTTP {r.status_code}')
             except (requests.RequestException,ValueError,TypeError,AttributeError) as e:notes.append(f'{term}: Shopify {str(e)[:80]}')
-        endpoints=[base+'/search?q='+quote(term)+'&type=product'] if merchant=='Lootstore' else [base+'/search?sSearch='+quote(term)]
+        endpoints=[base+'/search?q='+quote(term)+'&type=product'] if merchant=='Lootstore' else [base+'/search?sSearch='+quote(term), base+'/search/index/sSearch/'+quote(term), base+'/?sSearch='+quote(term)]
         for endpoint in endpoints:
             try:
                 r=session.get(endpoint,timeout=timeout)
@@ -86,12 +90,25 @@ def search(row,merchant,timeout=12):
                     add(el.get('data-url') or el.get('data-href'),el.get('title',''),'HTML-Datenattribut')
                 notes.append(f'{term}: {count} Produktlinks, {len(found)} eindeutige URLs')
             except requests.RequestException as e:notes.append(f'{term}: HTML {str(e)[:80]}')
+    # Brickmo's internal search sometimes returns unrelated recommendations.
+    # A public search-engine index is a fallback, never a source of automatic confirmation.
+    if merchant=='Brickmo' and not found:
+        for term in terms:
+            try:
+                r=session.get('https://www.google.com/search',params={'q':f'site:brickmo.com/themenwelt/ "{term}"'},timeout=timeout,
+                              headers={'User-Agent':'Mozilla/5.0'})
+                if r.ok:
+                    soup=BeautifulSoup(r.text,'html.parser')
+                    for a in soup.select('a[href]'):
+                        href=a.get('href','')
+                        if href.startswith('/url?'): href=parse_qs(urlparse(href).query).get('q',[''])[0]
+                        add(href,a.get_text(' ',strip=True),'Suchindex')
+                    notes.append(f'{term}: externer Suchindex, {len(found)} exakte Treffer')
+                else: notes.append(f'{term}: externer Suchindex HTTP {r.status_code}')
+            except requests.RequestException as e: notes.append(f'{term}: externer Suchindex {str(e)[:80]}')
     ranked=sorted(found.values(),key=lambda x:(-x['score'],x['url']))
-    exact=[x for x in ranked if x['score']>=75]
-    # If exact matches were not in the first results, expose a few lower-confidence candidates
-    # rather than claiming that the merchant has no products.
-    results=(exact[:5] if exact else ranked[:5])
-    if not exact and ranked:
-        notes.append('Kein exakter SKU/EAN-Treffer; mögliche Kandidaten werden zur manuellen Prüfung angezeigt')
+    results=ranked[:5]
+    if not ranked:
+        notes.append('Kein exakter SKU/EAN-Treffer; unpassende Produktlinks werden bewusst ausgeblendet')
     if not ranked:notes.append('Keine verwertbaren Produktlinks in den Shop-Antworten')
     return results,'; '.join(notes)

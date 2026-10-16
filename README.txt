@@ -1,15 +1,15 @@
-LBrixx V28.2 – Brickmo-Suchfix
+LBrixx V28.2 – Brickmo-Suche: exakte Treffer
 
-GitHub: app.py und quickmatch.py ersetzen.
-db_store.py und requirements.txt sind unverändert.
+Installation: NUR quickmatch.py im GitHub-Repository ersetzen.
+Alle anderen Dateien bleiben unverändert. Kein Supabase-Schemawechsel.
 
-Verbesserungen:
-- F9054 und FO9054 als SKU-Varianten
-- Exakte SKU-Treffer im Produktlink erhalten hohen Score
-- Auch nicht eindeutige Kandidaten werden zur manuellen Prüfung angezeigt
-- Ausführlichere Suchdiagnose
-- Kein automatisches Zuordnen
+Korrektur:
+- Unpassende Kandidaten (FO9051 usw.) werden nicht mehr vorgeschlagen.
+- F9054 und FO9054 gelten als Varianten; die Artikelnummer im Link wird geprüft.
+- Drei Brickmo-Suchpfade werden versucht.
+- Falls Brickmo keine exakten Links zurückgibt, wird ein öffentlicher Suchindex versucht.
+- Ohne exakten Treffer erfolgt KEINE Zuordnung.
 
-Test: Schnellzuordnung > Brickmo > F9054 > Passende Shop-Artikel suchen.
-Hinweis: Der Code ist lokal geprüft; ob Brickmo den konkreten Link in seinen
-Suchergebnissen liefert, kann erst im Streamlit-Betrieb geprüft werden.
+WICHTIG: Der Suchindex kann Anfragen blockieren oder nicht indexierte Produkte
+übersehen. Ein ausbleibender Treffer bedeutet daher nicht, dass der Artikel
+bei Brickmo fehlt. Bitte F9054 testen und Suchdiagnose zurückmelden.
