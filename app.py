@@ -197,7 +197,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11.1 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11.2.1 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -523,6 +523,28 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
                 st.session_state.full_category_comparison = None
         except Exception as exc:
             st.error(f'FunWhole-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.2: Pantasy als zweite Herstellerquelle (zusätzlich zu FunWhole).
+    pantasy_url = 'https://www.brickmo.com/weitere-marken/pantasy/'
+    st.markdown('**Neu: Herstellerindex Pantasy**')
+    st.caption('Indexiert die Brickmo-Pantasy-Herstellerübersicht. Bestehende Produktzuordnungen und Preise bleiben unverändert.')
+    if st.button('Pantasy vollständig indexieren', key='pantasy_full_index'):
+        try:
+            with st.spinner('Pantasy-Herstellerseiten werden vollständig indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, pantasy_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Pantasy-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.3: Reobrix als dritte Herstellerquelle.
+    reobrix_url = 'https://www.brickmo.com/weitere-marken/reobrix/'
+    st.markdown('**Herstellerindex Reobrix**')
+    st.caption('Indexiert die Brickmo-Reobrix-Herstellerübersicht. Bestehende Zuordnungen und Preise bleiben erhalten.')
+    if st.button('Reobrix vollständig indexieren', key='reobrix_full_index'):
+        try:
+            with st.spinner('Reobrix-Herstellerseiten werden vollständig indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, reobrix_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Reobrix-Indexierung fehlgeschlagen: {exc}')
     st.divider()
     st.caption('Weitere Kategorie manuell indexieren (bisherige Funktion):')
     if st.button('Kategorie vollständig einlesen', key='full_category_run'):

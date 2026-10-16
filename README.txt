@@ -1,1 +1,3 @@
-V28.11.1: Odoo-Import speichert nur geänderte Produkt- und Markenfelder. Keine Schreibzugriffe auf Angebote, Preise oder Preisverlauf beim Odoo-Import. Keine neue SQL-Migration erforderlich. Auf GitHub app.py und db_store.py ersetzen. Zunächst mit 5 Testartikeln prüfen.
+LBrixx V28.11.3 – Reobrix zusätzlich zu FunWhole und Pantasy.
+Auf GitHub nur app.py ersetzen. Keine SQL-Migration.
+Reobrix-Indexierung über den neuen Button starten und anschließend Zuordnungsvorschläge prüfen.
