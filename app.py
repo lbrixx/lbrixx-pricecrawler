@@ -78,6 +78,13 @@ def brickmo_match_keys(product):
     # manufacturer codes only when explicitly parenthesized.
     for raw in re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8})\)', description):
         values.append(raw.replace(' ', '').replace('-', ''))
+    # Odoo names may start with the manufacturer's code followed by the
+    # internal SKU, e.g. "L9087 (20007) Alien Frontier: Bounty Hub".
+    # Accept only an explicit alphanumeric code at the very beginning;
+    # never interpret arbitrary words or numeric product descriptions as SKUs.
+    leading = re.match(r'^\s*([A-Za-z]{1,6}[- ]?\d{3,8})(?=\s|[-–—:,(]|$)', description)
+    if leading:
+        values.append(leading.group(1).replace(' ', '').replace('-', ''))
     # Wange uses W5223 at Brickmo, while Odoo often stores 5223.
     # Only expand aliases when the imported Odoo brand is explicitly Wange.
     brand = str(product.get('brand_name', '') or '').strip().casefold()
