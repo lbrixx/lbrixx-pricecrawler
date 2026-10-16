@@ -1,6 +1,6 @@
-LBrixx Price-Crawler V28.11.15 – Lumibricks SKU-Aliase
+LBrixx Price-Crawler V28.11.16 – Markenfilter fuer Themenkategorien
 
-GitHub: nur app.py ersetzen.
-Lumibricks: 11015 / L11015 / LB11015 werden als Suchaliase verwendet, nur innerhalb der Marke Lumibricks.
-Keine Datenbankmigration. Bestehende Zuordnungen werden nicht verändert.
-Nach Deployment: Brickmo-Abgleich erneut starten. Falls kein Treffer, Lumibricks-Kategorie erneut indexieren.
+Auf GitHub app.py und brickmo_index.py ersetzen.
+Keine SQL-Migration erforderlich.
+Bei Themenkategorien wird die Marke aus eindeutigem Hersteller-Token im Produktlink erkannt.
+Markenfremde Treffer bleiben ausgeschlossen; bestehende Zuordnungen und Preise werden nicht geaendert.

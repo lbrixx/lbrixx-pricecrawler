@@ -320,6 +320,41 @@ def catalog_brand(source):
     m = re.search(r'\[Marke: ([^\]]+)\]', str(source or ''))
     return m.group(1).strip() if m else ''
 
+def match_catalog_brand(match):
+    """Resolve a verified index-category brand or an explicit brand in product URL.
+
+    Generic topic categories (e.g. Architektur) do not establish a brand.
+    Never infer a manufacturer solely from a matching numeric SKU.
+    """
+    source_brand = catalog_brand(match.get('source_sitemap', ''))
+    url_path = unquote(urlparse(match.get('product_url', '')).path).lower()
+    slug = url_path.rstrip('/').rsplit('/', 1)[-1]
+    tokens = set(re.split(r'[^a-z0-9]+', slug))
+    explicit = ''
+    if 'lumibricks' in tokens:
+        explicit = 'Lumibricks'
+    elif 'funwhole' in tokens:
+        explicit = 'FunWhole'
+    elif 'pantasy' in tokens:
+        explicit = 'Pantasy'
+    elif 'reobrix' in tokens:
+        explicit = 'Reobrix'
+    elif 'wange' in tokens:
+        explicit = 'Wange'
+    elif 'mouldking' in tokens or ('mould' in tokens and 'king' in tokens):
+        explicit = 'Mould King'
+    elif 'cada' in tokens:
+        explicit = 'CaDA'
+    elif 'mattel' in tokens and ('brick' in tokens or 'hot' in tokens):
+        explicit = 'Mattel Brick Shop'
+    elif 'happy' in tokens and 'build' in tokens:
+        explicit = 'Happy Build'
+    # Conflicting provenance is unsafe: do not suggest the match.
+    if source_brand and explicit and brand_key(source_brand) != brand_key(explicit):
+        return ''
+    return source_brand or explicit
+
+
 def brand_key(value):
     key = re.sub(r'[^a-z0-9]', '', str(value or '').casefold())
     return {'mattel':'mattelbrickshop', 'mouldking':'mouldking',

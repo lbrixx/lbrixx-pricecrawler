@@ -667,7 +667,7 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
                     seen_urls = set()
                     for key in brickmo_match_keys(product):
                         for match in indexed.get(key, []):
-                            catalog_brand = brickmo_index.brand_key(brickmo_index.catalog_brand(match['source_sitemap']))
+                            catalog_brand = brickmo_index.brand_key(brickmo_index.match_catalog_brand(match))
                             if not own_brand or not catalog_brand:
                                 unknown_brand += 1
                                 continue
