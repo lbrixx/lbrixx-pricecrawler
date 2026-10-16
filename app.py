@@ -239,7 +239,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.20 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.21 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -416,115 +416,77 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
 st.caption('Brickmo und Lootstore · Einzelartikelvergleich nach Deutschland · Versandkosten je Händler')
 st.success('🗄️ PostgreSQL verbunden – Produktdaten werden in Supabase gespeichert.')
 
-with st.expander('➕ Brickmo-Artikel hinzufügen',expanded=False):
-    with st.form('add_item',clear_on_submit=False):
-        a,b=st.columns(2)
-        with a:
-            url=st.text_input('Brickmo-Produktlink *',placeholder='https://www.brickmo.com/...')
-            sku=st.text_input('Hersteller-SKU (optional, wird sonst aus Link ermittelt)')
-        with b:
-            name=st.text_input('Beschreibung (optional, wird aus Shop übernommen)')
-            ownprice=st.text_input('LBrixx-Verkaufspreis in € (optional)',placeholder='49,90')
-        submitted=st.form_submit_button('Artikel hinzufügen und Brickmo prüfen',type='primary')
-    if submitted:
-        if not valid_url(url): st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse einfügen.')
-        else:
-            df=st.session_state.products.copy()
-            if url.strip() in df.brickmo_url.values: st.error('Dieser Brickmo-Link ist bereits gespeichert.')
+with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
+    with st.expander('Brickmo', expanded=False):
+        with st.form('add_item',clear_on_submit=False):
+            a,b=st.columns(2)
+            with a:
+                url=st.text_input('Brickmo-Produktlink *',placeholder='https://www.brickmo.com/...')
+                sku=st.text_input('Hersteller-SKU (optional, wird sonst aus Link ermittelt)')
+            with b:
+                name=st.text_input('Beschreibung (optional, wird aus Shop übernommen)')
+                ownprice=st.text_input('LBrixx-Verkaufspreis in € (optional)',placeholder='49,90')
+            submitted=st.form_submit_button('Artikel hinzufügen und Brickmo prüfen',type='primary')
+        if submitted:
+            if not valid_url(url): st.error('Bitte eine gültige Brickmo-HTTPS-Produktadresse einfügen.')
             else:
-                with st.spinner('Brickmo wird abgefragt…'):
-                    try:
-                        result=parse_product(url.strip())
-                        key=(sku.strip() or result['sku']).upper()
-                        if key and key in df.sku.values: st.error('Diese Hersteller-SKU ist bereits vorhanden. Bitte bestehenden Eintrag bearbeiten.')
-                        else:
-                            row={c:'' for c in COLUMNS}; row.update(result)
-                            row.update({'sku':key,'description':name.strip() or result['description'],'lbrixx_price':str(euro_num(ownprice) or '') if ownprice.strip() else '', 'brickmo_url':url.strip()})
-                            save(pd.concat([df,pd.DataFrame([row])],ignore_index=True)); st.success('Artikel hinzugefügt und gespeichert.'); st.rerun()
-                    except Exception as e: st.error(f'Artikel konnte nicht automatisch erfasst werden: {e}')
-
-with st.expander('➕ Lootstore-Artikel hinzufügen'):
-    st.caption('Lootstore-Produktlink einem bestehenden Artikel zuordnen oder einen neuen Artikel anlegen. Suchparameter werden entfernt.')
-    with st.form('add_lootstore_item'):
-        loot_url=st.text_input('Lootstore-Produktlink *',placeholder='https://lootstore.de/products/...')
-        loot_sku=st.text_input('Hersteller-SKU *',placeholder='z. B. F9051')
-        loot_name=st.text_input('Produktbezeichnung (nur bei neuen Artikeln)')
-        loot_submit=st.form_submit_button('Lootstore-Artikel hinzufügen',type='primary')
-    if loot_submit:
-        clean_loot=loot_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
-        key=loot_sku.strip().upper()
-        if not valid_lootstore_url(clean_loot):
-            st.error('Bitte einen gültigen Lootstore-HTTPS-Produktlink eintragen.')
-        elif not key:
-            st.error('Bitte die Hersteller-SKU zur eindeutigen Zuordnung angeben.')
-        else:
-            try:
-                current=st.session_state.products.copy()
-                matches=current.index[current.sku.astype(str).str.upper().eq(key)].tolist()
-                if len(matches)>1:
-                    st.error('Mehrere Artikel mit dieser SKU gefunden. Bitte über die Artikelbearbeitung zuordnen.')
-                elif clean_loot in current.lootstore_url.astype(str).str.split('?',n=1).str[0].str.rstrip('/').values:
-                    st.error('Dieser Lootstore-Link ist bereits einem Artikel zugeordnet.')
+                df=st.session_state.products.copy()
+                if url.strip() in df.brickmo_url.values: st.error('Dieser Brickmo-Link ist bereits gespeichert.')
                 else:
-                    with st.spinner('Lootstore-Preis wird abgefragt…'):
-                        result=parse_lootstore(clean_loot)
-                    if matches:
-                        idx=matches[0]
-                        current.at[idx,'lootstore_url']=clean_loot
-                        for field,value in result.items():
-                            if field.startswith('lootstore_') and field in current.columns and field!='lootstore_url':
-                                current.at[idx,field]=value
+                    with st.spinner('Brickmo wird abgefragt…'):
+                        try:
+                            result=parse_product(url.strip())
+                            key=(sku.strip() or result['sku']).upper()
+                            if key and key in df.sku.values: st.error('Diese Hersteller-SKU ist bereits vorhanden. Bitte bestehenden Eintrag bearbeiten.')
+                            else:
+                                row={c:'' for c in COLUMNS}; row.update(result)
+                                row.update({'sku':key,'description':name.strip() or result['description'],'lbrixx_price':str(euro_num(ownprice) or '') if ownprice.strip() else '', 'brickmo_url':url.strip()})
+                                save(pd.concat([df,pd.DataFrame([row])],ignore_index=True)); st.success('Artikel hinzugefügt und gespeichert.'); st.rerun()
+                        except Exception as e: st.error(f'Artikel konnte nicht automatisch erfasst werden: {e}')
+
+    with st.expander('Lootstore', expanded=False):
+        st.caption('Lootstore-Produktlink einem bestehenden Artikel zuordnen oder einen neuen Artikel anlegen. Suchparameter werden entfernt.')
+        with st.form('add_lootstore_item'):
+            loot_url=st.text_input('Lootstore-Produktlink *',placeholder='https://lootstore.de/products/...')
+            loot_sku=st.text_input('Hersteller-SKU *',placeholder='z. B. F9051')
+            loot_name=st.text_input('Produktbezeichnung (nur bei neuen Artikeln)')
+            loot_submit=st.form_submit_button('Lootstore-Artikel hinzufügen',type='primary')
+        if loot_submit:
+            clean_loot=loot_url.strip().split('?',1)[0].split('#',1)[0].rstrip('/')
+            key=loot_sku.strip().upper()
+            if not valid_lootstore_url(clean_loot):
+                st.error('Bitte einen gültigen Lootstore-HTTPS-Produktlink eintragen.')
+            elif not key:
+                st.error('Bitte die Hersteller-SKU zur eindeutigen Zuordnung angeben.')
+            else:
+                try:
+                    current=st.session_state.products.copy()
+                    matches=current.index[current.sku.astype(str).str.upper().eq(key)].tolist()
+                    if len(matches)>1:
+                        st.error('Mehrere Artikel mit dieser SKU gefunden. Bitte über die Artikelbearbeitung zuordnen.')
+                    elif clean_loot in current.lootstore_url.astype(str).str.split('?',n=1).str[0].str.rstrip('/').values:
+                        st.error('Dieser Lootstore-Link ist bereits einem Artikel zugeordnet.')
                     else:
-                        row={c:'' for c in COLUMNS}
-                        row.update({'sku':key,'description':loot_name.strip() or key,'lootstore_url':clean_loot})
-                        row.update({k:v for k,v in result.items() if k.startswith('lootstore_') and k!='lootstore_url'})
-                        current=pd.concat([current,pd.DataFrame([row])],ignore_index=True)
-                    save(current)
-                    st.success('Lootstore-Artikel gespeichert.')
-                    st.rerun()
-            except Exception as exc:
-                st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
+                        with st.spinner('Lootstore-Preis wird abgefragt…'):
+                            result=parse_lootstore(clean_loot)
+                        if matches:
+                            idx=matches[0]
+                            current.at[idx,'lootstore_url']=clean_loot
+                            for field,value in result.items():
+                                if field.startswith('lootstore_') and field in current.columns and field!='lootstore_url':
+                                    current.at[idx,field]=value
+                        else:
+                            row={c:'' for c in COLUMNS}
+                            row.update({'sku':key,'description':loot_name.strip() or key,'lootstore_url':clean_loot})
+                            row.update({k:v for k,v in result.items() if k.startswith('lootstore_') and k!='lootstore_url'})
+                            current=pd.concat([current,pd.DataFrame([row])],ignore_index=True)
+                        save(current)
+                        st.success('Lootstore-Artikel gespeichert.')
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
-    st.caption('Liest öffentliche Brickmo-Sitemaps ein und speichert erkannte Artikelnummern mit Produktlinks in Supabase. Die Indexabdeckung hängt von den tatsächlich bereitgestellten Sitemaps ab.')
-    sitemap_sku=st.text_input('Artikelnummer in sämtlichen Sitemap-URLs prüfen', value='FO9054', key='sitemap_sku')
-    if st.button('Brickmo-Katalog aktualisieren und SKU prüfen', key='brickmo_index_refresh'):
-        try:
-            with st.spinner('Brickmo-Sitemaps werden eingelesen (kann einige Minuten dauern)…'):
-                report=brickmo_index.refresh(DB_URL, target_sku=sitemap_sku)
-            st.session_state.brickmo_index_report=report
-            if report['saved']:
-                st.success(f"{report['saved']} Produktlinks gespeichert oder aktualisiert; {report['sitemaps']} Sitemaps verarbeitet.")
-            else:
-                st.warning('Keine neuen SKU-Produktlinks eingelesen. Bitte die Diagnose prüfen. Der bestehende Index wurde nicht gelöscht.')
-        except Exception as exc:
-            st.error(f'Katalogaktualisierung fehlgeschlagen: {exc}')
-    report=st.session_state.get('brickmo_index_report')
-    if report:
-        if report['truncated']: st.info('Nur ein Teil der Sitemaps verarbeitet. Ein erneuter Lauf kann weitere Seiten erfassen.')
-        with st.expander('Katalog-Diagnose', expanded=True):
-            target=report.get('target_sku', 'FO9054')
-            matches=report.get('exact_matches', [])
-            scanned=report.get('scanned_urls', 0)
-            st.markdown(f'**SKU-Prüfung: {target} – {len(matches)} exakte URL-Treffer in {scanned} geprüften URLs**')
-            if matches:
-                st.success(f'{target} wurde in der Sitemap gefunden.')
-                for u in matches: st.code(u, language=None)
-            elif report.get('complete', False):
-                st.warning(f'{target} ist in den {scanned} geprüften Sitemap-URLs nicht enthalten. Eine andere Katalogquelle ist erforderlich.')
-            else:
-                st.warning(f'Kein Treffer für {target} in den bisher geprüften {scanned} URLs. Nicht alle Sitemaps wurden verarbeitet.')
-            for note in report['notes']: st.caption(note)
-            sample_urls=report.get('sample_urls', [])
-            st.markdown('**20 Beispiel-URLs aus den abgerufenen Sitemaps**')
-            if sample_urls:
-                for n, sample_url in enumerate(sample_urls[:20], start=1):
-                    st.code(f'{n:02d}. {sample_url}', language=None)
-                st.caption('Die Links stammen aus der Sitemap. Sie sind nicht zwingend Produktseiten und werden nur zur Diagnose angezeigt.')
-            else:
-                st.info('Keine Beispiel-URLs verfügbar. Bitte den Brickmo-Katalog erneut aktualisieren.')
-
-with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.17)', expanded=False):
+with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.21)', expanded=False):
     st.caption('Ausschließlich offizielle Herstellerkategorien. Themenwelten und freie Kategorie-URLs sind für Indexierung und Vorschläge deaktiviert. Bestehende Zuordnungen bleiben erhalten.')
     st.caption('Maximal 250 Seiten je Hersteller; Vorschläge müssen einzeln bestätigt werden.')
     # V28.10: Nur FunWhole als zusätzliche Herstellerquelle; keine anderen Themenwelten.
@@ -731,79 +693,6 @@ with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.17)', exp
         with st.expander('Detailprüfung – Diagnose'):
             for note in enrich_report['notes']:
                 st.caption(note)
-
-with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
-    st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
-    mc1,mc2=st.columns(2)
-    with mc1:
-        match_merchant=st.selectbox('Shop', ['Brickmo','Lootstore'], key='match_merchant')
-    with mc2:
-        match_limit=st.selectbox('Maximale Artikel pro Suchlauf', [5,10,20], key='match_limit')
-    pending=st.session_state.products.copy()
-    url_col='brickmo_url' if match_merchant=='Brickmo' else 'lootstore_url'
-    pending=pending[(pending['deleted']!='1') & (pending[url_col].astype(str).str.strip()=='')]
-    pending=pending[(pending['sku'].astype(str).str.strip()!='') | (pending['ean'].astype(str).str.strip()!='')]
-    st.caption(f'{len(pending)} Artikel ohne {match_merchant}-Zuordnung mit SKU/EAN')
-    match_sku=st.text_input('Gezielt nach Artikelnummer suchen (optional)', placeholder='z. B. F9043', key='match_sku')
-    if match_sku.strip():
-        pending=pending[pending['sku'].astype(str).str.upper().str.strip()==match_sku.strip().upper()]
-        st.caption(f'{len(pending)} passende Artikel in deiner Datenbank')
-    if st.button('Passende Shop-Artikel suchen',key='match_start',type='primary'):
-        results=[]; issues=[]
-        subset=pending.head(int(match_limit))
-        progress=st.progress(0)
-        with st.spinner('Shop-Suchergebnisse werden geprüft…'):
-            for n,(_,item) in enumerate(subset.iterrows(),1):
-                try:
-                    if match_merchant=='Brickmo':
-                        matches=[]; diagnostics=[]; seen_urls=set()
-                        for search_key in brickmo_match_keys(item):
-                            found,diagnostic=brickmo_index.lookup(DB_URL,search_key)
-                            diagnostics.append(diagnostic)
-                            for found_match in found:
-                                if found_match['url'] not in seen_urls:
-                                    seen_urls.add(found_match['url'])
-                                    matches.append(found_match)
-                        issue=' · '.join(diagnostics)
-                    else:
-                        matches,issue=quickmatch.search(item.to_dict(),match_merchant)
-                    if issue: issues.append(f"{item['sku']}: {issue}")
-                    for candidate in matches:
-                        candidate.update({'product_id':str(item['db_id']),'sku':str(item['sku']),'product_name':str(item['description']),'merchant':match_merchant})
-                        results.append(candidate)
-                except Exception as exc:
-                    issues.append(f"{item['sku']}: {str(exc)[:120]}")
-                progress.progress(n/max(1,len(subset)))
-                if n<len(subset): time.sleep(1.5)
-        st.session_state.match_suggestions=results
-        st.session_state.match_issues=issues
-        st.session_state.match_shop=match_merchant
-    if st.session_state.get('match_shop')==match_merchant:
-        suggestions=st.session_state.get('match_suggestions',[])
-        if suggestions:
-            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen.')
-            for i,candidate in enumerate(suggestions):
-                with st.container(border=True):
-                    st.markdown(f"**{html.escape(candidate['sku'])} – {html.escape(candidate['product_name'][:90])}**")
-                    st.write(f"Vorschlag: {candidate['title']} · Übereinstimmung {candidate['score']}/100 ({candidate['reason']})")
-                    st.markdown(f"[Shop-Artikel öffnen]({candidate['url']})")
-                    if st.button('✓ Zuordnung bestätigen',key=f'match_confirm_{i}_{candidate["product_id"]}'):
-                        try:
-                            clean=db_store.confirm_match(DB_URL,candidate['product_id'],candidate['merchant'],candidate['url'])
-                            current=st.session_state.products
-                            mask=current['db_id'].astype(str)==candidate['product_id']
-                            current.loc[mask,url_col]=clean
-                            st.session_state.products=current
-                            st.session_state.match_suggestions=[x for x in suggestions if x['product_id']!=candidate['product_id']]
-                            st.success('Zuordnung gespeichert. Preisabfrage kann anschließend gestartet werden.')
-                            st.rerun()
-                        except Exception as exc: st.error(f'Zuordnung fehlgeschlagen: {exc}')
-        elif 'match_suggestions' in st.session_state:
-            st.warning('Keine hinreichend eindeutigen Treffer gefunden. Es wurde nichts zugeordnet.')
-        issues=st.session_state.get('match_issues',[])
-        if issues:
-            with st.expander(f'{len(issues)} Suchdiagnosen (auch ohne Treffer)', expanded=not bool(suggestions)):
-                for issue in issues: st.caption(issue)
 
 st.subheader('Artikelübersicht')
 df=st.session_state.products.copy()
