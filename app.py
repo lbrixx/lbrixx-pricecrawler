@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.34 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.35 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -969,6 +969,7 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
         if st.button('🔎 Lumibricks-SKU-Vorschläge suchen'):
             with st.spinner('Öffentlichen Lumibricks-Katalog lesen…'):
                 catalog,diagnostics,count=lumibricks_store.catalog()
+            st.session_state['lumi_catalog_diagnostic']=catalog
             suggestions=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip(): continue
@@ -987,6 +988,39 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)
+        with st.expander('🔬 Lumibricks-SKU-Einzeldiagnose', expanded=False):
+            st.caption('Prüft Odoo-SKU, Herstellerartikelnummer aus der Beschreibung und den zuletzt eingelesenen Lumibricks-Katalog. Keine Datenbankänderung.')
+            diagnostic_sku=st.text_input('LBrixx-Artikelnummer',value='15002',key='lumi_diag_sku').strip()
+            if st.button('SKU-Abgleich prüfen',key='lumi_diag_run'):
+                candidates=lumi_products.loc[lumi_products['sku'].astype(str).str.strip().str.upper().eq(diagnostic_sku.upper())]
+                if candidates.empty:
+                    st.warning(f'LBrixx-SKU {diagnostic_sku} wurde unter den Lumibricks-/FunWhole-Artikeln nicht gefunden. Marke prüfen.')
+                else:
+                    stored_catalog=st.session_state.get('lumi_catalog_diagnostic')
+                    if stored_catalog is None:
+                        st.warning('Zuerst „Lumibricks-SKU-Vorschläge suchen“ ausführen, damit der Katalog für die Diagnose vorliegt.')
+                    else:
+                        st.caption(f'Letzter Suchlauf: {len(stored_catalog)} SKU-Schlüssel')
+                        for _,item in candidates.iterrows():
+                            raw_keys=brickmo_match_keys(item)
+                            normalized_keys=list(dict.fromkeys(lumibricks_store.sku_key(k) for k in raw_keys if lumibricks_store.sku_key(k)))
+                            st.write(f"**Odoo-SKU:** {item.sku} · **Marke:** {item.brand_name}")
+                            st.write(f"**Beschreibung:** {item.description}")
+                            st.write(f"**Abgleichskandidaten:** {', '.join(raw_keys)}")
+                            st.write(f"**Normalisierte Schlüssel:** {', '.join(normalized_keys)}")
+                            st.write(f"**Bereits zugeordnet:** {'Ja' if str(item.lumibricks_url).strip() else 'Nein'}")
+                            matches=[(key,stored_catalog[key]) for key in normalized_keys if key in stored_catalog]
+                            if matches:
+                                for key,hit in matches:
+                                    st.success(f"Treffer {key} · {hit.get('source','unbekannt')} · {hit.get('title','')}")
+                                    st.markdown(f"[Lumibricks-Produkt öffnen]({hit['url']})")
+                                if str(item.lumibricks_url).strip():
+                                    st.info('Kein neuer Vorschlag, da der Artikel bereits einen Lumibricks-Link hat.')
+                            else:
+                                st.warning('Keiner der Artikelnummern-Schlüssel ist im zuletzt geladenen Lumibricks-Katalog vorhanden.')
+                                code=next((k for k in normalized_keys if k.isdigit()),'')
+                                nearby=[k for k in stored_catalog if code and code in k][:12]
+                                if nearby: st.write('Ähnliche Katalogschlüssel: '+', '.join(nearby))
         suggestions=st.session_state.get('lumi_suggestions',[])
         if suggestions:
             st.caption('Abgleich über Odoo-SKU oder Hersteller-SKU aus der Beschreibung. Jeden Treffer einzeln bestätigen:')
