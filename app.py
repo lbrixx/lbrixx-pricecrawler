@@ -197,7 +197,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11.2.1 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11.9 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -511,7 +511,7 @@ with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False
 with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expanded=False):
     st.caption('Erkennt die Anzahl der Kategorieseiten automatisch, erfasst eindeutige Produktlinks und speichert klar erkennbare Artikelnummern im Supabase-Index. Produktzuordnungen werden nicht verändert.')
     full_category_url = st.text_input('Kategorie für vollständigen Index', value=brickmo_index.CATEGORY_START, key='full_category_url')
-    st.caption('Sicherheitsgrenze: maximal 60 Seiten. Herstellerübergreifende SKU-Erkennung aus URLs; alle Vorschläge bleiben unbestätigt.')
+    st.caption('Sicherheitsgrenze: maximal 250 Seiten. Herstellerübergreifende SKU-Erkennung aus URLs; alle Vorschläge bleiben unbestätigt.')
     # V28.10: Nur FunWhole als zusätzliche Herstellerquelle; keine anderen Themenwelten.
     funwhole_url = 'https://www.brickmo.com/weitere-marken/funwhole/'
     st.markdown('**Neu: Herstellerindex FunWhole**')
@@ -545,6 +545,62 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
                 st.session_state.full_category_comparison = None
         except Exception as exc:
             st.error(f'Reobrix-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.4: Wange als vierte Herstellerquelle.
+    wange_url = 'https://www.brickmo.com/wange/'
+    st.markdown('**Herstellerindex Wange**')
+    st.caption('Indexiert die Brickmo-Wange-Kategorie. Bestehende Zuordnungen und Preise bleiben erhalten.')
+    if st.button('Wange vollständig indexieren', key='wange_full_index'):
+        try:
+            with st.spinner('Wange-Herstellerseiten werden vollständig indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, wange_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Wange-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.6: Mould King als fünfte Herstellerquelle.
+    mouldking_url = 'https://www.brickmo.com/cat/index/sCategory/6589'
+    st.markdown('**Herstellerindex Mould King**')
+    st.caption('Indexiert die Brickmo-Mould-King-Kategorie. Bestehende Zuordnungen und Preise bleiben erhalten.')
+    if st.button('Mould King vollständig indexieren', key='mouldking_full_index'):
+        try:
+            with st.spinner('Mould-King-Herstellerseiten werden vollständig indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, mouldking_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Mould-King-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.7: Happy Build vorab aufnehmen, auch wenn die Kategorie derzeit leer ist.
+    happybuild_url = 'https://www.brickmo.com/weitere-marken/happy-build/'
+    st.markdown('**Herstellerindex Happy Build**')
+    st.caption('Die Kategorie ist derzeit möglicherweise leer. Bei 0 Artikeln bleiben vorhandene Daten unverändert; die Quelle kann später erneut indexiert werden.')
+    if st.button('Happy Build vollständig indexieren', key='happybuild_full_index'):
+        try:
+            with st.spinner('Happy-Build-Herstellerseiten werden indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, happybuild_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Happy-Build-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.9: Mattel Brick Shop als siebte Herstellerquelle.
+    # Immer mit der ersten Kategorieseite starten, damit alle Seiten erfasst werden.
+    mattel_url = 'https://www.brickmo.com/weitere-marken/mattel-brick-shop/'
+    st.markdown('**Herstellerindex Mattel Brick Shop**')
+    st.caption('Indexiert alle erkannten Seiten der Mattel-Brick-Shop-Kategorie (nicht nur Seite 2). Bestehende Zuordnungen und Preise bleiben erhalten.')
+    if st.button('Mattel Brick Shop vollständig indexieren', key='mattel_brick_shop_full_index'):
+        try:
+            with st.spinner('Mattel-Brick-Shop-Herstellerseiten werden indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, mattel_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'Mattel-Brick-Shop-Indexierung fehlgeschlagen: {exc}')
+    # V28.11.9: CaDA als achte Herstellerquelle.
+    cada_url = 'https://www.brickmo.com/cada/'
+    st.markdown('**Herstellerindex CaDA**')
+    st.caption('Indexiert alle erkannten Seiten der Brickmo-CaDA-Kategorie. Bestehende Zuordnungen und Preise bleiben erhalten.')
+    if st.button('CaDA vollständig indexieren', key='cada_full_index'):
+        try:
+            with st.spinner('CaDA-Herstellerseiten werden indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, cada_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'CaDA-Indexierung fehlgeschlagen: {exc}')
     st.divider()
     st.caption('Weitere Kategorie manuell indexieren (bisherige Funktion):')
     if st.button('Kategorie vollständig einlesen', key='full_category_run'):

@@ -329,7 +329,7 @@ def _category_sku_from_url(url):
     return ''
 
 
-def _last_category_page(soup, category_path, safety_cap=60):
+def _last_category_page(soup, category_path, safety_cap=250):
     """Read explicit pagination links, never follow fragment or filter links."""
     pages = [1]
     for a in soup.select('a[href]'):
@@ -345,7 +345,7 @@ def _last_category_page(soup, category_path, safety_cap=60):
     return max(pages)
 
 
-def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15):
+def index_category(db_url, category_url=CATEGORY_START, max_pages=250, timeout=15):
     """Index all confidently identifiable SKU URLs from one Brickmo category.
 
     A URL-derived SKU is a suggestion, not a verified product-detail SKU.
@@ -356,7 +356,7 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15
     if parsed.scheme != 'https' or parsed.hostname not in ('www.brickmo.com', 'brickmo.com'):
         raise ValueError('Nur HTTPS-Kategorieseiten von brickmo.com erlaubt.')
     base = urlunparse(('https', 'www.brickmo.com', parsed.path.rstrip('/') + '/', '', '', ''))
-    cap = max(1, min(int(max_pages), 60))
+    cap = max(1, min(int(max_pages), 250))
     session = requests.Session()
     session.headers.update(CATEGORY_HEADERS)
     notes, records, all_links = [], {}, set()
@@ -373,8 +373,13 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15
                 break
             soup = BeautifulSoup(response.text, 'html.parser')
             if total_pages is None:
-                total_pages = _last_category_page(soup, parsed.path, safety_cap=60)
-                notes.append(f'Automatisch erkannte Seitenanzahl: {total_pages}')
+                total_pages = _last_category_page(soup, parsed.path, safety_cap=cap)
+                notes.append(f'Zunächst erkannte Seitenanzahl: {total_pages}')
+            else:
+                discovered = _last_category_page(soup, parsed.path, safety_cap=cap)
+                if discovered > total_pages:
+                    total_pages = discovered
+                    notes.append(f'Seitennavigation erweitert auf: {total_pages}')
             new = 0
             for a in soup.select('a[href]'):
                 href = urljoin(url, a.get('href', ''))
@@ -420,7 +425,7 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15
     return {'pages_detected':total_pages or 1,'pages_checked':checked,
             'links_found':len(all_links),'sku_links':len(records),
             'saved':len(records),'notes':notes,
-            'complete':checked >= (total_pages or 1),
+            'complete':checked >= (total_pages or 1) and (total_pages or 1) <= cap,
             'sample_skus':sorted(set(row[1] for row in records.values()))[:20]}
 
 
