@@ -754,9 +754,10 @@ else:
     table_css = """
     <style>
     .lbrixx-scroll {overflow:auto; max-height:76vh; width:100%; border:1px solid rgba(128,128,128,.28); border-radius:8px; isolation:isolate;}
-    .lbrixx-table {width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; line-height:1.3;}
+    .lbrixx-table {width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; line-height:1.3; color:#F5F7FB !important;}
     .lbrixx-table th {position:sticky; top:0; z-index:5; text-align:left; font-weight:700; padding:9px 8px; background:#283342; color:#fff; white-space:nowrap; border-bottom:1px solid #566272;}
-    .lbrixx-table td {padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.2); vertical-align:middle; background:#141821;}
+    .lbrixx-table td {padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.2); vertical-align:middle; background:#141821; color:#F5F7FB !important;}
+    .lbrixx-table td:not(.shop-price) a {color:#F5F7FB !important;}
     .lbrixx-table tr:nth-child(even) td:not(.shop-price) {background:#1c222d;}
     .lbrixx-table tr:hover td:not(.shop-price) {background:#313c4d;}
     .lbrixx-table .edit {min-width:102px; width:102px; position:sticky; left:0; z-index:3;}
@@ -772,12 +773,12 @@ else:
     .lbrixx-table .edit a:hover {background:rgba(128,128,128,.25);}
     .lbrixx-table .photo img {width:43px;height:43px;object-fit:contain;border-radius:4px;background:white;}
     .lbrixx-table .shop-price {font-weight:700;white-space:nowrap;min-width:105px;}
-    .lbrixx-table .shop-price.missing-association {background:#fff1d8;color:#8c3300;text-align:center;min-width:105px;}
+    .lbrixx-table .shop-price.missing-association {background:#fff1d8;color:#8c3300 !important;text-align:center;min-width:105px;}
     .lbrixx-table .missing-mark {display:block;font-size:30px;line-height:1.15;font-weight:900;}
     .lbrixx-table .missing-label {font-size:10px;font-weight:750;white-space:nowrap;}
-    .lbrixx-table .shop-price.available {background:#B7E1A1;color:#173B20;}
-    .lbrixx-table .shop-price.unknown {background:#006CB7;color:#fff;}
-    .lbrixx-table .shop-price.unavailable {background:#D01012;color:#fff;}
+    .lbrixx-table .shop-price.available {background:#B7E1A1;color:#173B20 !important;}
+    .lbrixx-table .shop-price.unknown {background:#006CB7;color:#fff !important;}
+    .lbrixx-table .shop-price.unavailable {background:#D01012;color:#fff !important;}
     .lbrixx-table .shop-price a {color:inherit;text-decoration:underline;text-underline-offset:3px;}
     .lbrixx-table .shop-price .timestamp {font-size:10px;font-weight:400;margin-top:2px;opacity:.9;}
     .lbrixx-table th a:hover {text-decoration:underline!important;}
