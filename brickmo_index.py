@@ -333,13 +333,20 @@ def match_catalog_brand(match):
     source_brand = catalog_brand(source)
     if brand_key(source_brand) not in {brand_key(v) for v in BRAND_CATEGORY_PATHS.values()}:
         return ''
-    # FunWhole's manufacturer category also lists LumiBricks products.
-    # Only an explicit LumiBricks token in the product slug can distinguish them.
+    # FunWhole category contains both FunWhole and LumiBricks.
+    # A distinct LB-prefixed model number in the product URL or indexed SKU
+    # identifies LumiBricks even when the slug omits the brand name.
     if brand_key(source_brand) == 'funwhole':
         slug = unquote(urlparse(match.get('product_url', '')).path).lower().rstrip('/').rsplit('/', 1)[-1]
         tokens = set(re.split(r'[^a-z0-9]+', slug))
-        if 'lumibricks' in tokens:
+        indexed_sku = str(match.get('manufacturer_sku') or '').strip().upper()
+        if ('lumibricks' in tokens
+                or re.search(r'(?<![a-z0-9])lb\d{4,6}(?![a-z0-9])', slug)
+                or re.fullmatch(r'LB\d{4,6}', indexed_sku)):
             return 'Lumibricks'
+        # Ambiguous numeric model numbers cannot safely distinguish the brands.
+        if re.fullmatch(r'\d{4,6}', indexed_sku):
+            return ''
     return source_brand
 
 

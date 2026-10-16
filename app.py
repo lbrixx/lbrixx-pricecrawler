@@ -620,6 +620,29 @@ with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.17)', exp
             for note in full_report['notes']: st.caption(note)
             st.write('Beispiel-SKUs:', ', '.join(full_report['sample_skus']) or 'Keine')
             st.caption('Falls Mattel 0 SKU-Links meldet: Produktdetail-Anreicherung für die Mattel-Kategorie starten; die Produktnummern stehen möglicherweise nur auf den Detailseiten.')
+        with st.expander('SKU-Diagnose: Warum fehlt ein Vorschlag?', expanded=False):
+            diagnostic_sku = st.text_input('Odoo-Artikelnummer (z. B. 11015)', value='11015', key='brickmo_diagnostic_sku').strip().upper()
+            if st.button('Artikelnummer prüfen', key='brickmo_diagnostic_button'):
+                try:
+                    own = st.session_state.products.copy()
+                    own = own[own['sku'].astype(str).str.upper().eq(diagnostic_sku)]
+                    if own.empty:
+                        st.warning('Keine Odoo-Artikelzeile mit dieser SKU gefunden.')
+                    for _, own_row in own.iterrows():
+                        keys = brickmo_match_keys(own_row)
+                        st.write('Odoo-Marke:', str(own_row.get('brand_name', '')) or '(leer)')
+                        st.write('Suchschlüssel:', ', '.join(keys))
+                        found = brickmo_index.batch_match_skus(DB_URL, keys)
+                        rows = [m for key in keys for m in found.get(key, [])]
+                        if not rows:
+                            st.warning('Kein SKU-Treffer im gespeicherten Brickmo-Index. Herstellerkategorie neu indexieren oder SKU-Erkennung prüfen.')
+                        for m in rows[:25]:
+                            cb = brickmo_index.match_catalog_brand(m)
+                            ob = str(own_row.get('brand_name', '') or '')
+                            verdict = ('Marke stimmt überein' if brickmo_index.brand_key(cb) == brickmo_index.brand_key(ob) and cb else 'Marke fehlt oder stimmt nicht überein')
+                            st.write({'SKU':m.get('manufacturer_sku'), 'Brickmo-Marke':cb or '(nicht gesichert)', 'Ergebnis':verdict, 'URL':m.get('product_url'), 'Quelle':m.get('source_sitemap')})
+                except Exception as exc:
+                    st.error(f'Diagnose fehlgeschlagen: {exc}')
         if st.button('Mit LBrixx-Artikeln abgleichen', key='full_category_compare'):
             try:
                 products_to_match = st.session_state.products.copy()
