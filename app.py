@@ -78,6 +78,16 @@ def brickmo_match_keys(product):
     # manufacturer codes only when explicitly parenthesized.
     for raw in re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8})\)', description):
         values.append(raw.replace(' ', '').replace('-', ''))
+    # Wange uses W5223 at Brickmo, while Odoo often stores 5223.
+    # Only expand aliases when the imported Odoo brand is explicitly Wange.
+    brand = str(product.get('brand_name', '') or '').strip().casefold()
+    if brand == 'wange':
+        for raw in list(values):
+            code = brickmo_index.normalized_sku(raw)
+            if re.fullmatch(r'\d{3,7}', code):
+                values.append('W' + code)
+            elif re.fullmatch(r'W\d{3,7}', code):
+                values.append(code[1:])
     return list(dict.fromkeys(brickmo_index.normalized_sku(x) for x in values if x))
 
 def valid_url(url):

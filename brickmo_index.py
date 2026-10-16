@@ -320,6 +320,12 @@ def _category_sku_from_url(url):
         m = re.search(r'(?:^|[-_])(lb\d{3,6}|l\d{4,6}|\d{4,6})$', slug)
         if m:
             return normalized_sku(m.group(1))
+    # Wange product titles often include W5223 rather than numeric 5223.
+    # Extract only an explicit W-prefixed model code from a Wange URL.
+    if 'wange' in parts:
+        m = re.search(r'(?:^|[-_])(w\d{3,7})(?=$|[-_])', slug)
+        if m:
+            return m.group(1).upper()
     # Other explicitly identified manufacturers: match trailing model number.
     brands = ('wange', 'mould', 'mouldking', 'cada', 'cobi', 'pantasy', 'reobrix')
     if any(token in parts for token in brands):

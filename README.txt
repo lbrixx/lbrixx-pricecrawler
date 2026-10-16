@@ -1,6 +1,1 @@
-LBrixx Price-Crawler V28.11.9
-CaDA als achte Brickmo-Herstellerkategorie ergänzt.
-Quelle: https://www.brickmo.com/cada/
-Der vorhandene Indexer erfasst die Folgeseiten (bis zu 250).
-Alle bisherigen Hersteller, Odoo-Import, Daten und Zuordnungen bleiben unverändert.
-GitHub: nur app.py ersetzen. Keine SQL-Migration.
+V28.11.11: Wange W5223 <-> 5223 SKU aliases and Wange slug detection. Replace app.py and brickmo_index.py. No database migration.
