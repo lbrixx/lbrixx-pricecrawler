@@ -430,6 +430,19 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.9)', expan
     st.caption('Erkennt die Anzahl der Kategorieseiten automatisch, erfasst eindeutige Produktlinks und speichert klar erkennbare Artikelnummern im Supabase-Index. Produktzuordnungen werden nicht verändert.')
     full_category_url = st.text_input('Kategorie für vollständigen Index', value=brickmo_index.CATEGORY_START, key='full_category_url')
     st.caption('Sicherheitsgrenze: maximal 60 Seiten. Herstellerübergreifende SKU-Erkennung aus URLs; alle Vorschläge bleiben unbestätigt.')
+    # V28.10: Nur FunWhole als zusätzliche Herstellerquelle; keine anderen Themenwelten.
+    funwhole_url = 'https://www.brickmo.com/weitere-marken/funwhole/'
+    st.markdown('**Neu: Herstellerindex FunWhole**')
+    st.caption('Liest alle erkannten Seiten der Brickmo-FunWhole-Herstellerübersicht ein. Bereits gespeicherte Zuordnungen bleiben bestehen.')
+    if st.button('FunWhole vollständig indexieren', key='funwhole_full_index'):
+        try:
+            with st.spinner('FunWhole-Herstellerseiten werden vollständig indexiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, funwhole_url)
+                st.session_state.full_category_comparison = None
+        except Exception as exc:
+            st.error(f'FunWhole-Indexierung fehlgeschlagen: {exc}')
+    st.divider()
+    st.caption('Weitere Kategorie manuell indexieren (bisherige Funktion):')
     if st.button('Kategorie vollständig einlesen', key='full_category_run'):
         try:
             with st.spinner('Kategorieseiten werden eingelesen und der Index wird aktualisiert…'):

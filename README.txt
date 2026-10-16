@@ -1,14 +1,10 @@
-LBrixx V28.5 – gezielte SKU-Prüfung in Brickmo-Sitemaps
+LBrixx V28.10 – FunWhole-Herstellerindex
 
-Installation: Nur app.py und brickmo_index.py in GitHub ersetzen.
-Andere Dateien, Secrets und Supabase-Daten bleiben unverändert.
+Neu: Button „FunWhole vollständig indexieren“ unter „Brickmo-Kategorie vollständig indexieren“.
+Quelle: https://www.brickmo.com/weitere-marken/funwhole/
+Erkannte Seitenzahl automatisch, bis maximal 60 Seiten.
+Anschließend „Mit LBrixx-Artikeln abgleichen“ und Treffer einzeln bestätigen.
+Vorhandene Zuordnungen und Preise werden durch die Indexierung nicht verändert.
 
-1. Brickmo-Produktindex verwalten öffnen.
-2. Im Feld "Artikelnummer in sämtlichen Sitemap-URLs prüfen" FO9054 belassen.
-3. "Brickmo-Katalog aktualisieren und SKU prüfen" klicken.
-4. Katalog-Diagnose zeigt Anzahl geprüfter URLs und exakte FO9054-Treffer.
-
-Hinweis: Ein Treffer wird nur dann gemeldet, wenn die SKU als eigenständiger
-Teil der URL oder eines Query-Parameters vorkommt. Fehlt FO9054 in der
-Sitemap, ist das kein Beweis, dass der Artikel bei Brickmo nicht existiert.
-Die App ändert durch die Diagnose keine Produktzuordnungen.
+Deployment: Nur app.py auf GitHub ersetzen. brickmo_index.py aus V28.9.2 beibehalten.
+Keine Live-Tests gegen Brickmo oder Supabase durchgeführt.
