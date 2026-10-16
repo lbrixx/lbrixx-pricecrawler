@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.38 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.32 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -969,158 +969,21 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
         if st.button('🔎 Lumibricks-SKU-Vorschläge suchen'):
             with st.spinner('Öffentlichen Lumibricks-Katalog lesen…'):
                 catalog,diagnostics,count=lumibricks_store.catalog()
-            st.session_state['lumi_catalog_diagnostic']=catalog
             suggestions=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip(): continue
-                # Use primary SKU and explicit manufacturer codes in description.
-                keys = []
-                for candidate in brickmo_match_keys(product):
-                    normalized = lumibricks_store.sku_key(candidate)
-                    if normalized and normalized not in keys:
-                        keys.append(normalized)
-                for key in keys:
-                    hit = catalog.get(key)
-                    if hit:
-                        suggestions.append((str(product.db_id), str(product.sku),
-                                            hit['url'], hit['title'], key))
-                        break
-            # Search every unresolved manufacturer SKU in one controlled run.
-            # Checkpoints are stored in PostgreSQL so a rerun or restart can resume.
-            checked_skus = st.session_state.setdefault('lumi_target_checked', {})
-            try:
-                checked_skus.update(lumibricks_store.load_search_progress(DB_URL))
-                persistent_progress = True
-            except Exception as exc:
-                persistent_progress = False
-                diagnostics.append(f'Fortschritt nur in dieser Sitzung gespeichert: {exc}')
-            targeted_checks = 0
-            targeted_hits = 0
-            rate_limited = any('429' in str(d) for d in diagnostics)
-            suggested_ids = {entry[0] for entry in suggestions}
-            # Prefer explicit F manufacturer codes; deduplicate requests across Odoo rows.
-            pending = {}
-            for _, product in lumi_products.iterrows():
-                pid = str(product.db_id)
-                if str(product.lumibricks_url).strip() or pid in suggested_ids:
-                    continue
-                keys = set(lumibricks_store.sku_key(x) for x in brickmo_match_keys(product))
-                for candidate in brickmo_match_keys(product):
-                    code = str(candidate).strip().upper()
-                    normalized = lumibricks_store.sku_key(code)
-                    if code.startswith('F') and normalized not in catalog and normalized in keys:
-                        pending.setdefault(normalized, []).append((pid, str(product.sku), code))
-            pending_keys = list(pending)
-            progress = st.progress(0, text=f'Gezielte Lumibricks-Nachsuche: 0 / {len(pending_keys)} SKUs') if pending_keys else None
-            processed = 0
-            for normalized in pending_keys:
-                if rate_limited:
-                    break
-                if normalized in checked_skus:
-                    hit = checked_skus[normalized]
-                else:
-                    with st.spinner(f'Lumibricks-SKU {normalized} prüfen…'):
-                        hit, details = lumibricks_store.targeted_sku_search(normalized, max_product_checks=3)
-                    targeted_checks += 1
-                    if any('429' in str(detail) for detail in details):
-                        rate_limited = True
-                        diagnostics.append('HTTP 429: Suche unterbrochen. Gespeicherter Fortschritt bleibt erhalten; später erneut starten.')
-                        break
-                    checked_skus[normalized] = hit
-                    if persistent_progress:
-                        try:
-                            lumibricks_store.save_search_progress(DB_URL, normalized, hit)
-                        except Exception as exc:
-                            persistent_progress = False
-                            diagnostics.append(f'Datenbank-Checkpoint fehlgeschlagen: {exc}')
-                    time.sleep(2)
-                if hit:
-                    catalog[normalized] = hit
-                    for pid, sku, code in pending[normalized]:
-                        if pid not in suggested_ids:
-                            suggestions.append((pid, sku, hit['url'], hit['title'], code))
-                            suggested_ids.add(pid)
-                            targeted_hits += 1
-                processed += 1
-                if progress:
-                    progress.progress(processed / len(pending_keys), text=f'Gezielte Lumibricks-Nachsuche: {processed} / {len(pending_keys)} SKUs')
-            remaining = len(pending_keys) - processed
-            if progress:
-                progress.empty()
-            st.session_state['lumi_catalog_diagnostic'] = catalog
-            st.session_state['lumi_suggestions'] = suggestions
+                key=lumibricks_store.sku_key(product.sku)
+                hit=catalog.get(key)
+                if hit: suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+            st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
-            st.caption(f'Gezielte Nachsuche: {targeted_checks} neue SKU-Prüfungen · {targeted_hits} zusätzliche Treffer · {remaining} noch offen' + (' · bei HTTP 429 unterbrochen' if rate_limited else '') + (' · Fortschritt in PostgreSQL gespeichert' if persistent_progress else ' · Fortschritt nur in dieser Sitzung'))
             for message in diagnostics: st.warning(message)
-        with st.expander('🔬 Lumibricks-SKU-Einzeldiagnose', expanded=False):
-            st.caption('Prüft Odoo-SKU, Herstellerartikelnummer aus der Beschreibung und den zuletzt eingelesenen Lumibricks-Katalog. Keine Datenbankänderung.')
-            diagnostic_sku=st.text_input('LBrixx-Artikelnummer',value='15002',key='lumi_diag_sku').strip()
-            if st.button('SKU-Abgleich prüfen',key='lumi_diag_run'):
-                candidates=lumi_products.loc[lumi_products['sku'].astype(str).str.strip().str.upper().eq(diagnostic_sku.upper())]
-                if candidates.empty:
-                    st.warning(f'LBrixx-SKU {diagnostic_sku} wurde unter den Lumibricks-/FunWhole-Artikeln nicht gefunden. Marke prüfen.')
-                else:
-                    stored_catalog=st.session_state.get('lumi_catalog_diagnostic')
-                    if stored_catalog is None:
-                        st.warning('Zuerst „Lumibricks-SKU-Vorschläge suchen“ ausführen, damit der Katalog für die Diagnose vorliegt.')
-                    else:
-                        st.caption(f'Letzter Suchlauf: {len(stored_catalog)} SKU-Schlüssel')
-                        for _,item in candidates.iterrows():
-                            raw_keys=brickmo_match_keys(item)
-                            normalized_keys=list(dict.fromkeys(lumibricks_store.sku_key(k) for k in raw_keys if lumibricks_store.sku_key(k)))
-                            st.write(f"**Odoo-SKU:** {item.sku} · **Marke:** {item.brand_name}")
-                            st.write(f"**Beschreibung:** {item.description}")
-                            st.write(f"**Abgleichskandidaten:** {', '.join(raw_keys)}")
-                            st.write(f"**Normalisierte Schlüssel:** {', '.join(normalized_keys)}")
-                            st.write(f"**Bereits zugeordnet:** {'Ja' if str(item.lumibricks_url).strip() else 'Nein'}")
-                            matches=[(key,stored_catalog[key]) for key in normalized_keys if key in stored_catalog]
-                            if matches:
-                                for key,hit in matches:
-                                    st.success(f"Treffer {key} · {hit.get('source','unbekannt')} · {hit.get('title','')}")
-                                    st.markdown(f"[Lumibricks-Produkt öffnen]({hit['url']})")
-                                if str(item.lumibricks_url).strip():
-                                    st.info('Kein neuer Vorschlag, da der Artikel bereits einen Lumibricks-Link hat.')
-                            else:
-                                st.warning('Keiner der Artikelnummern-Schlüssel ist im zuletzt geladenen Lumibricks-Katalog vorhanden. Bitte die gezielte Produktsuche darunter verwenden.')
-                                code=next((k for k in normalized_keys if k.isdigit()),'')
-                                nearby=[k for k in stored_catalog if code and code in k][:12]
-                                if nearby: st.write('Ähnliche Katalogschlüssel: '+', '.join(nearby))
-        with st.expander('🔍 Fehlende Lumibricks-SKU gezielt suchen', expanded=False):
-            st.caption('Sucht nach einer einzelnen Herstellerartikelnummer auf Lumibricks. Prüft Suchergebnisse anhand der Produktdaten; keine automatische Zuordnung.')
-            missing_sku=st.text_input('Herstellerartikelnummer (z. B. F9031)', value='F9031', key='lumi_target_sku').strip()
-            if st.button('Lumibricks gezielt durchsuchen', key='lumi_target_run'):
-                with st.spinner('Gezielte Lumibricks-Produktsuche…'):
-                    found, details=lumibricks_store.targeted_sku_search(missing_sku)
-                st.session_state['lumi_target_result']=(missing_sku,found,details)
-                if found:
-                    existing=st.session_state.get('lumi_catalog_diagnostic',{})
-                    existing[lumibricks_store.sku_key(missing_sku)]=found
-                    st.session_state['lumi_catalog_diagnostic']=existing
-                    # Offer only unassigned Odoo products with an exact normalized key.
-                    suggestions=list(st.session_state.get('lumi_suggestions',[]))
-                    for _,item in lumi_products.iterrows():
-                        if str(item.lumibricks_url).strip(): continue
-                        keys={lumibricks_store.sku_key(k) for k in brickmo_match_keys(item)}
-                        if lumibricks_store.sku_key(missing_sku) in keys:
-                            pid=str(item.db_id)
-                            if not any(str(s[0])==pid for s in suggestions):
-                                suggestions.append((pid,str(item.sku),found['url'],found['title'],lumibricks_store.sku_key(missing_sku)))
-                    st.session_state['lumi_suggestions']=suggestions
-            last=st.session_state.get('lumi_target_result')
-            if last:
-                searched,found,details=last
-                for line in details: st.caption(line)
-                if found:
-                    st.success(f"Bestätigter Treffer für {searched}: {found['title']}")
-                    st.markdown(f"[Produkt ansehen]({found['url']})")
-                else:
-                    st.warning('Kein verifizierter Treffer. Ein vorhandenes Produkt wird dadurch nicht ausgeschlossen.')
         suggestions=st.session_state.get('lumi_suggestions',[])
         if suggestions:
-            st.caption('Abgleich über Odoo-SKU oder Hersteller-SKU aus der Beschreibung. Jeden Treffer einzeln bestätigen:')
-            for pid,sku,url,title,matched_sku in suggestions[:100]:
+            st.caption('Direkter SKU-Abgleich: LBrixx-Artikel → passender Lumibricks-Artikel. Jeden Treffer direkt bestätigen:')
+            for pid,sku,url,title in suggestions[:100]:
                 a,b=st.columns([5,1])
-                with a: st.markdown(f'**LBrixx {sku}** → **Lumibricks {matched_sku}** · {title[:75]} · [Produkt ansehen]({url})')
+                with a: st.markdown(f'**LBrixx {sku}** → **Lumibricks {sku}** · {title[:75]} · [Produkt ansehen]({url})')
                 with b:
                     if st.button('✓ Zuordnen',key=f'lumi_confirm_{pid}'):
                         try:
