@@ -4,6 +4,7 @@ Does not change LBrixx products, Brickmo data or historical prices.
 """
 import re
 import time
+import xml.etree.ElementTree as ET
 from urllib.parse import urlparse, urljoin, quote_plus
 from bs4 import BeautifulSoup
 import requests
@@ -102,6 +103,44 @@ def _html_collection_handles(session, max_pages, timeout, notes):
             break
     return found
 
+def _sitemap_product_handles(session, timeout, notes, max_sitemaps=30, max_handles=2500):
+    """Read same-host Shopify product sitemaps; bound discovery and never follow off-site URLs."""
+    pending = ['https://lootstore.de/sitemap.xml']
+    visited = set()
+    handles = set()
+    while pending and len(visited) < max_sitemaps and len(handles) < max_handles:
+        url = pending.pop(0)
+        parsed = urlparse(url)
+        if parsed.scheme != 'https' or parsed.hostname not in ('lootstore.de', 'www.lootstore.de'):
+            continue
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            response = session.get(url, timeout=timeout, headers={'Accept': 'application/xml,text/xml'})
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            locs = [el.text.strip() for el in root.iter() if el.tag.rsplit('}', 1)[-1] == 'loc' and el.text]
+            for loc in locs:
+                target = urlparse(loc)
+                if target.scheme != 'https' or target.hostname not in ('lootstore.de', 'www.lootstore.de'):
+                    continue
+                path = target.path
+                match = re.fullmatch(r'/products/([a-zA-Z0-9_-]+)/?', path)
+                if match:
+                    handles.add(match.group(1))
+                elif path.endswith('.xml') and ('sitemap_products' in path or path == '/sitemap.xml'):
+                    if loc not in visited and loc not in pending:
+                        pending.append(loc)
+                if len(handles) >= max_handles:
+                    break
+        except (requests.RequestException, ET.ParseError, ValueError) as exc:
+            notes.append(f'Sitemap {urlparse(url).path}: {type(exc).__name__}: {str(exc)[:100]}')
+    notes.append(f'Produktsitemap: {len(visited)} XML-Dateien geprüft, {len(handles)} Produktlinks entdeckt.')
+    if pending or len(handles) >= max_handles:
+        notes.append('Sitemap-Sicherheitslimit erreicht; Index möglicherweise unvollständig.')
+    return handles
+
 def index_collection(db_url, max_pages=10, timeout=20):
     """Fetch Shopify catalog; allow verified Pantasy title+URL fallback."""
     session = requests.Session()
@@ -180,6 +219,23 @@ def index_collection(db_url, max_pages=10, timeout=20):
         except (requests.RequestException, ValueError) as exc:
             notes.append(f'HTML-Produkt {handle}: {type(exc).__name__}: {str(exc)[:120]}')
     notes.append(f'HTML-Ergänzung: {html_added} zusätzliche Produkte mit eindeutiger Artikelnummer.')
+    sitemap_handles = _sitemap_product_handles(session, timeout, notes)
+    sitemap_missing = sorted(sitemap_handles - json_handles - html_handles)
+    sitemap_added = 0
+    for handle in sitemap_missing:
+        try:
+            item = _fetch_product(session, handle, timeout)
+            row, source = _record_for_item(item)
+            if not row:
+                continue
+            records[(item['url'], row[1])] = row
+            sitemap_added += 1
+            if source == 'title_url':
+                fallback_count += 1
+        except (requests.RequestException, ValueError) as exc:
+            notes.append(f'Sitemap-Produkt {handle}: {type(exc).__name__}: {str(exc)[:100]}')
+    notes.append(f'Sitemap-Ergänzung: {sitemap_added} weitere Produkte mit eindeutiger Artikelnummer.')
+
     notes.append(f'Pantasy-Titel/URL-Fallback: {fallback_count} Produkte erkannt.')
     saved = 0
     if records:
@@ -208,7 +264,7 @@ def index_collection(db_url, max_pages=10, timeout=20):
                         source_collection=excluded.source_collection, indexed_at=now()''', list(by_url.values()))
             saved = len(by_url)
     return {'saved':saved, 'pages_checked':checked, 'products_seen':product_count,
-            'complete':complete, 'html_added':html_added, 'fallback_count':fallback_count, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
+            'complete':complete, 'html_added':html_added, 'sitemap_added':sitemap_added, 'fallback_count':fallback_count, 'notes':notes, 'sample_skus':[v[1] for v in list(records.values())[:15]]}
 
 def index_product_url(db_url, product_url, timeout=20):
     """Index one user-supplied Lootstore URL after verifying its vendor and SKU."""

@@ -1,4 +1,5 @@
 import os, re, io, csv, json, base64, hashlib, html, time
+from urllib.parse import urlencode
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import pandas as pd
@@ -487,8 +488,8 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
 
-with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.27)', expanded=False):
-    st.caption('Indexiert Shopify-Produktliste und HTML-Kategorieseiten; Pantasy ohne Varianten-SKU wird bei übereinstimmender Artikelnummer in Titel und URL erkannt. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.28)', expanded=False):
+    st.caption('Indexiert Shopify-Produktliste, HTML-Kategorieseiten und Produktsitemaps; Pantasy ohne Varianten-SKU wird bei übereinstimmender Artikelnummer in Titel und URL erkannt. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
     if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
         try:
             with st.spinner('Lootstore-Katalog wird eingelesen…'):
@@ -498,7 +499,7 @@ with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.27)', expande
             st.error(f'Lootstore-Indexierung fehlgeschlagen: {exc}')
     loot_report = st.session_state.get('lootstore_index_report')
     if loot_report:
-        st.write(f"{loot_report['pages_checked']} Seiten geprüft · {loot_report['products_seen']} Produkte gesehen · {loot_report['saved']} SKU-Links gespeichert")
+        st.write(f"{loot_report['pages_checked']} Seiten geprüft · {loot_report['products_seen']} Produkte gesehen · {loot_report['saved']} SKU-Links gespeichert · {loot_report.get('sitemap_added', 0)} Sitemap-Ergänzungen")
         if not loot_report['complete']:
             st.warning('Die Indexierung wurde nicht vollständig abgeschlossen. Diagnose prüfen.')
         with st.expander('Lootstore-Indexdiagnose'):
@@ -968,6 +969,10 @@ hidden_only_mask=hidden_mask & ~deleted_mask
 view_options=['Aktive Artikel', '👁️ Ausgeblendete Artikel', '🗑️ Gelöschte Artikel']
 view_col, brand_col = st.columns([2, 1], gap='medium')
 with view_col:
+    requested_view = st.query_params.get('view')
+    if requested_view in view_options and st.session_state.get('_article_view_query') != requested_view:
+        st.session_state['article_status_view'] = requested_view
+        st.session_state['_article_view_query'] = requested_view
     article_view=st.radio(
         'Artikelstatus', view_options, horizontal=True,
         key='article_status_view',
@@ -989,6 +994,11 @@ brand_values=sorted(
     key=str.casefold,
 )
 with brand_col:
+    requested_brand = st.query_params.get('brand')
+    available_brands = ['Alle Marken', 'Ohne Marke'] + brand_values
+    if requested_brand in available_brands and st.session_state.get('_article_brand_query') != requested_brand:
+        st.session_state['article_brand_filter'] = requested_brand
+        st.session_state['_article_brand_query'] = requested_brand
     brand_selection=st.selectbox(
         'Markenfilter', ['Alle Marken', 'Ohne Marke'] + brand_values,
         key='article_brand_filter',
@@ -1144,7 +1154,8 @@ else:
         if not k: return f'<th>{cell(h)}</th>'
         next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
         arrow=(' ▲' if sort_direction=='asc' else ' ▼') if sort_field==k else ''
-        return f'<th><a href="?sort={k}&dir={next_dir}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
+        query = urlencode({'sort': k, 'dir': next_dir, 'view': article_view, 'brand': brand_selection})
+        return f'<th><a href="?{html.escape(query, quote=True)}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
     table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
     st.html(table_html)
     st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel in UTC.')
