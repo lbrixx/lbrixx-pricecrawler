@@ -103,25 +103,9 @@ def catalog(limit_pages=4):
         if page<limit_pages: time.sleep(2)
     return result,diagnostics,len(seen)
 
-def parse_eur(url):
-    """Only accept explicit EUR price in structured data. Never interpret USD as EUR."""
-    clean=canonical(url)
-    session=requests.Session();session.headers.update(HEADERS)
-    # Shopify Markets currency is controlled by storefront localization, not by
-    # a ?currency=EUR query parameter. Submit the Germany market selection first.
-    # A localized EUR price is still required in structured offers afterwards.
-    try:
-        session.post(BASE+'/localization',data={
-            'form_type':'localization', '_method':'put',
-            'country_code':'DE', 'language_code':'de',
-            'return_to':urlparse(clean).path,
-        },headers={'Referer':clean,'Origin':BASE},timeout=20)
-    except requests.RequestException:
-        pass  # Missing locale negotiation must never cause a guessed price.
-    r=session.get(clean,timeout=30)
-    if r.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
-    r.raise_for_status()
-    soup=BeautifulSoup(r.text,'html.parser')
+def _jsonld_eur_prices(html):
+    """Return explicitly EUR-denominated structured offer prices."""
+    soup=BeautifulSoup(html,'html.parser')
     prices=[]
     for script in soup.select('script[type="application/ld+json"]'):
         try: data=json.loads(script.string or script.get_text())
@@ -130,22 +114,97 @@ def parse_eur(url):
             if isinstance(obj,list):
                 for x in obj: visit(x)
             elif isinstance(obj,dict):
-                if obj.get('@type') in ('Offer','AggregateOffer') and str(obj.get('priceCurrency','')).upper()=='EUR':
+                typ=obj.get('@type',[])
+                if isinstance(typ,str): typ=[typ]
+                if 'Offer' in typ and str(obj.get('priceCurrency','')).upper()=='EUR':
                     try: prices.append(Decimal(str(obj.get('price'))))
-                    except Exception: pass
+                    except (ValueError,TypeError,ArithmeticError): pass
                 for v in obj.values():
                     if isinstance(v,(dict,list)): visit(v)
         visit(data)
-    if not prices:
-        currencies=sorted(set(re.findall(r'\"priceCurrency\"\s*:\s*\"([A-Z]{3})\"',r.text)))
-        raise ValueError('Kein ausdrücklich als EUR ausgewiesener Produktpreis gefunden (HTML-Währungen: '+(', '.join(currencies) or 'unbekannt')+'). Kein Preis übernommen. Website-Lokalisierung für DE/EUR prüfen.')
+    return prices
+
+
+def _selected_variant_eur(product):
+    """Choose German delivery variant, never the first arbitrary regional variant."""
+    variants=product.get('variants') or []
+    german=[v for v in variants if str(v.get('sku','')).upper().strip().endswith('#DE')]
+    if len(german)==1:
+        chosen=german[0]
+    elif len(german)>1:
+        raise ValueError('Mehrere DE-Varianten vorhanden; keine eindeutige Preiszuordnung')
+    elif len(variants)==1:
+        chosen=variants[0]
+    else:
+        raise ValueError('Keine eindeutige DE-Variante im Shopify-Produkt gefunden')
+    raw=chosen.get('price')
+    if raw is None or isinstance(raw,bool):
+        raise ValueError('Kein Variantenpreis im Shopify-Produkt vorhanden')
+    # Shopify Ajax monetary values are integer minor currency units (EUR cents).
+    if not str(raw).isdigit():
+        raise ValueError('Unerwartetes Format des Shopify-Variantenpreises')
+    price=Decimal(str(raw))/Decimal('100')
+    if not Decimal('0')<price<Decimal('100000'):
+        raise ValueError('Unplausibler EUR-Variantenpreis')
+    return price, 'unavailable' if chosen.get('available') is False else 'unknown'
+
+
+def parse_eur(url):
+    """Read a German market EUR price, validating actual currency before any DB write.
+
+    Shopify's locale-aware /de/products/<handle>.js returns prices in the
+    *presentment currency* of the current session. /de/cart.js explicitly
+    identifies that currency. A /de/ URL by itself does NOT guarantee EUR.
+    """
+    clean=canonical(url)
+    slug=urlparse(clean).path.rstrip('/').split('/')[-1]
+    session=requests.Session()
+    session.headers.update(HEADERS)
+    # Establish cookies and select DE as the shipping market; redirects and
+    # market negotiation are shop-controlled, so never assume success.
+    try:
+        landing=session.get(BASE+'/de',timeout=20)
+        if landing.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+        session.post(BASE+'/localization',data={
+            'form_type':'localization','_method':'put',
+            'country_code':'DE','language_code':'de','return_to':urlparse(clean).path,
+        },headers={'Referer':clean,'Origin':BASE},timeout=20)
+    except requests.RequestException:
+        pass
+    cart=session.get(BASE+'/de/cart.js',timeout=25)
+    if cart.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    if cart.ok:
+        try: currency=str(cart.json().get('currency') or '').upper()
+        except (ValueError,TypeError,AttributeError): currency=''
+    else:
+        currency=''
+    if currency=='EUR':
+        details=session.get(BASE+'/de/products/'+quote(slug,safe='')+'.js',timeout=25)
+        if details.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+        details.raise_for_status()
+        try: product=details.json()
+        except (ValueError,TypeError): raise ValueError('Shopify-Produktdaten sind kein gültiges JSON')
+        return _selected_variant_eur(product)
+
+    # The shop can sometimes publish a genuinely EUR-denominated structured
+    # offer even if Shopify's cart reports another market. Use it only if a
+    # unique explicit EUR price exists, never convert or relabel USD values.
+    page=session.get(clean,timeout=30)
+    if page.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    page.raise_for_status()
+    prices=_jsonld_eur_prices(page.text)
+    if len(set(prices))==1:
+        price=prices[0]
+        if not Decimal('0')<price<Decimal('100000'):
+            raise ValueError('Unplausibler EUR-Preis')
+        return price,'unknown'
     if len(set(prices))>1:
-        raise ValueError('Mehrere unterschiedliche EUR-Angebotspreise gefunden; keine eindeutige Preiszuordnung.')
-    price=prices[0]
-    if not 0 < price < 100000: raise ValueError('Unplausibler EUR-Preis')
-    text=soup.get_text(' ',strip=True).lower()
-    availability='unavailable' if 'ausverkauft' in text or 'sold out' in text else 'unknown'
-    return price,availability
+        raise ValueError('Mehrere verschiedene EUR-Angebote in Produktdaten; kein eindeutiger Preis')
+    currencies=sorted(set(re.findall(r'"priceCurrency"\s*:\s*"([A-Z]{3})"',page.text)))
+    raise ValueError('Kein nachweislicher DE/EUR-Preis. Shopify-Währung: '
+        +(currency or 'nicht abrufbar')+'; HTML-Währungen: '
+        +(', '.join(currencies) or 'unbekannt')
+        +'. Preis nicht gespeichert – kein automatischer USD/EUR-Umrechnungskurs.')
 
 def record(url,pid,product_url):
     clean=canonical(product_url)
