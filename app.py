@@ -37,6 +37,14 @@ def save(df):
     stored=db_store.save(DB_URL,normalize(df))
     st.session_state.products=normalize(stored)
 
+def save_changed_rows(df, indices):
+    """Persist only modified product rows, never rewrite the entire catalog."""
+    unique=list(dict.fromkeys(int(i) for i in indices))
+    if not unique:
+        return
+    db_store.save(DB_URL, normalize(df.loc[unique].copy()))
+    st.session_state.products=normalize(db_store.load(DB_URL))
+
 def set_product_flag(row, field, enabled):
     product_id=str(row.get('db_id','')).strip()
     if not product_id.isdigit():
@@ -390,7 +398,7 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
     if st.session_state.get('match_shop')==match_merchant:
         suggestions=st.session_state.get('match_suggestions',[])
         if suggestions:
-            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen.')
+            st.info(f'{len(suggestions)} mögliche Treffer – bitte Shop-Link und Artikelnummer vor Bestätigung prüfen. Niedrige Übereinstimmung bedeutet: nur ein Suchkandidat.')
             for i,candidate in enumerate(suggestions):
                 with st.container(border=True):
                     st.markdown(f"**{html.escape(candidate['sku'])} – {html.escape(candidate['product_name'][:90])}**")
@@ -408,7 +416,7 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
                             st.rerun()
                         except Exception as exc: st.error(f'Zuordnung fehlgeschlagen: {exc}')
         elif 'match_suggestions' in st.session_state:
-            st.warning('Keine hinreichend eindeutigen Treffer gefunden. Es wurde nichts zugeordnet.')
+            st.warning('Keine Produktvorschläge aus der Shop-Suche. Details unter Suchdiagnosen.')
         issues=st.session_state.get('match_issues',[])
         if issues:
             with st.expander(f'{len(issues)} Suchdiagnosen (auch ohne Treffer)', expanded=not bool(suggestions)):
@@ -536,7 +544,7 @@ if edit_param != '':
                     for field in ('brickmo_price', 'shipping', 'total', 'availability', 'last_checked', 'error', 'brickmo_photo'):
                         updated.at[edit_index, field] = ''
                 try:
-                    save(updated)
+                    save_changed_rows(updated,[edit_index])
                     if new_price.strip() and new_price_value != euro_num(current['lbrixx_price']):
                         db_store.record_own_price(DB_URL, str(current['db_id']), new_price_value)
                     st.query_params.clear()
@@ -726,6 +734,7 @@ else:
         if one_update and chosen=='Bitte Artikel wählen':
             st.warning('Bitte zunächst einen Artikel auswählen.')
         else:
+            changed_indices=[]
             for shop in shops:
                 url_field='brickmo_url' if shop=='brickmo' else 'lootstore_url'
                 subset=[selectable[chosen]] if one_update else list(active.index)
@@ -735,9 +744,10 @@ else:
                     continue
                 st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
                 new,ok,failed=update_prices(new,shop,indices)
+                changed_indices.extend(indices)
                 st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
             try:
-                save(new); st.success('Preisprüfung gespeichert.'); st.rerun()
+                save_changed_rows(new,changed_indices); st.success('Preisprüfung gespeichert.'); st.rerun()
             except Exception as exc: st.error(f'Speichern fehlgeschlagen: {exc}')
 
     st.caption('Zum Bearbeiten, Ausblenden oder Löschen bitte die Aktionen direkt am Anfang der jeweiligen Tabellenzeile verwenden.')

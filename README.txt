@@ -1,32 +1,15 @@
-LBrixx Price-Crawler V28 – PostgreSQL-Umstellung (erste Testversion)
+LBrixx V28.2 – Brickmo-Suchfix
 
-1. In GitHub die bisherigen Dateien app.py und requirements.txt ersetzen.
-2. NEU: db_store.py in das gleiche Repository-Verzeichnis wie app.py hochladen.
-3. SUPABASE_DB_URL muss in den Secrets der BESTEHENDEN Streamlit-App hinterlegt sein.
-4. Vorher V27 in GitHub sichern (Commit/Tag oder ZIP-Download).
-5. App neu starten und Odoo-Verbindung zunächst mit 5 Produkten testen.
-6. Danach vollständigen Odoo-Import durchführen. Alte GitHub-CSV wird NICHT eingelesen.
-7. Brickmo/Lootstore-Links neu zuordnen und Preisabrufe einzeln testen.
+GitHub: app.py und quickmatch.py ersetzen.
+db_store.py und requirements.txt sind unverändert.
 
-Enthalten:
-- PostgreSQL als einzige Datenquelle; kein GitHub-CSV-Schreibzugriff.
-- Odoo-Import inklusive EAN/Barcode; Produkt-ID in SQL unabhängig von Odoo.
-- Bestehende Händlerzuordnung, Preise, Status, Ausblenden/Löschen.
-- Preisverlauf für Händler nach erfolgreichen Preisabfragen, optional inkl. Versand.
-- Tabellenkopf fixiert; Sortieren durch Klick auf Spaltenüberschriften.
-- Fehlermarkierung im Händlerpreisfeld; Shop- und Einzelaktualisierung.
-- LBrixx-Preis im Edit-Formular bearbeitbar, nur intern in PostgreSQL.
+Verbesserungen:
+- F9054 und FO9054 als SKU-Varianten
+- Exakte SKU-Treffer im Produktlink erhalten hohen Score
+- Auch nicht eindeutige Kandidaten werden zur manuellen Prüfung angezeigt
+- Ausführlichere Suchdiagnose
+- Kein automatisches Zuordnen
 
-Noch NICHT enthalten:
-- Rückschreiben der LBrixx-Preise nach Odoo (aus Sicherheitsgründen gesperrt).
-- LBrixx-Eigenpreis-Historie und Hintergrund-Jobs.
-- Automatische Händler-Zuordnung (geplant für V29).
-- Odoo-Bilder werden nicht mehr als Base64 in der Datenbank gespeichert;
-  dafür wird eine separate Bildspeicherlösung benötigt.
-- Tabellenaktionen sind noch aus V27 übernommen; bitte nach jedem Import testen.
-
-Wichtig: Die SQL-Struktur muss wie zuvor angelegt sein. Das Datenbankschema
-hat UNIQUE(product_id,merchant_id); pro Produkt/Händler ist ein Angebot möglich.
-Es werden keine Zugangsdaten im Code gespeichert.
-
-BILDER-FIX: Odoo image_128 wird beim Import abgerufen und als kleines Vorschaubild in products.image_url gespeichert. Bereits importierte Artikel mit derselben Importauswahl erneut importieren. Kein neues SQL/Secret erforderlich.
+Test: Schnellzuordnung > Brickmo > F9054 > Passende Shop-Artikel suchen.
+Hinweis: Der Code ist lokal geprüft; ob Brickmo den konkreten Link in seinen
+Suchergebnissen liefert, kann erst im Streamlit-Betrieb geprüft werden.
