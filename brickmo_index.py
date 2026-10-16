@@ -405,7 +405,7 @@ def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15
                     (product_url,manufacturer_sku,product_title,source_sitemap,indexed_at)
                     VALUES (%s,%s,%s,%s,now())
                     ON CONFLICT(product_url) DO UPDATE SET
-                    manufacturer_sku=CASE WHEN public.brickmo_catalog.source_sitemap LIKE '%%bestätigt%%'
+                    manufacturer_sku=CASE WHEN strpos(COALESCE(public.brickmo_catalog.source_sitemap, ''), 'bestätigt') > 0
                         THEN public.brickmo_catalog.manufacturer_sku ELSE excluded.manufacturer_sku END,
                     product_title=excluded.product_title,
                     source_sitemap=CASE
