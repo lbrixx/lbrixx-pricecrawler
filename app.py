@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 import db_store
 import quickmatch
 import brickmo_index
+import lootstore_index
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='lbrixx_logo.png')
 DATA_FILE = 'lbrixx_products.csv'
@@ -239,7 +240,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.22 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.23 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -485,6 +486,69 @@ with st.expander('➕ Artikel manuell hinzufügen:', expanded=False):
                         st.rerun()
                 except Exception as exc:
                     st.error(f'Lootstore-Artikel konnte nicht gespeichert werden: {exc}')
+
+with st.expander('📦 Lootstore-Klemmbausteine indexieren (V28.11.23)', expanded=False):
+    st.caption('Liest die Shopify-Produktliste der gesamten Lootstore-Klemmbaustein-Kategorie. Zunächst Pantasy-Abgleich; keine automatische Zuordnung. Brickmo und vorhandene Preise bleiben unverändert.')
+    if st.button('Lootstore-Klemmbausteine vollständig indexieren', key='lootstore_collection_index'):
+        try:
+            with st.spinner('Lootstore-Katalog wird eingelesen…'):
+                st.session_state.lootstore_index_report = lootstore_index.index_collection(DB_URL)
+                st.session_state.lootstore_comparison = None
+        except Exception as exc:
+            st.error(f'Lootstore-Indexierung fehlgeschlagen: {exc}')
+    loot_report = st.session_state.get('lootstore_index_report')
+    if loot_report:
+        st.write(f"{loot_report['pages_checked']} Seiten geprüft · {loot_report['products_seen']} Produkte gesehen · {loot_report['saved']} SKU-Links gespeichert")
+        if not loot_report['complete']:
+            st.warning('Die Indexierung wurde nicht vollständig abgeschlossen. Diagnose prüfen.')
+        with st.expander('Lootstore-Indexdiagnose'):
+            for note in loot_report['notes']:
+                st.caption(note)
+            st.write('Beispiel-SKUs:', ', '.join(loot_report['sample_skus']) or 'Keine')
+    if st.button('Pantasy mit LBrixx abgleichen', key='lootstore_pantasy_compare'):
+        try:
+            own = st.session_state.products.copy()
+            own = own[(own['deleted'] != '1') & (own['lootstore_url'].astype(str).str.strip() == '')]
+            own = own[own['brand_name'].map(lootstore_index.brand).eq('pantasy')]
+            indexed = lootstore_index.batch_match_skus(DB_URL, [k for _, p in own.iterrows() for k in brickmo_match_keys(p)])
+            candidates = []
+            for _, product in own.iterrows():
+                seen = set()
+                for key in brickmo_match_keys(product):
+                    for match in indexed.get(lootstore_index.norm(key), []):
+                        if lootstore_index.brand(match['brand_name']) != 'pantasy':
+                            continue
+                        if match['product_url'] in seen:
+                            continue
+                        seen.add(match['product_url'])
+                        candidates.append({'db_id':str(product['db_id']), 'sku':str(product['sku']),
+                            'description':str(product['description']), 'title':match['product_title'],
+                            'url':match['product_url'], 'matched_sku':key})
+            st.session_state.lootstore_comparison = candidates
+        except Exception as exc:
+            st.error(f'Lootstore-Abgleich fehlgeschlagen: {exc}')
+    loot_candidates = st.session_state.get('lootstore_comparison')
+    if loot_candidates is not None:
+        st.write(f'{len(loot_candidates)} Pantasy-Zuordnungsvorschläge – einzeln bestätigen.')
+        for i, candidate in enumerate(loot_candidates):
+            with st.container(border=True):
+                st.markdown(f"**{html.escape(candidate['sku'])} – {html.escape(candidate['description'])}**")
+                st.write('Lootstore:', candidate['title'])
+                st.caption(f"Treffer über SKU {candidate['matched_sku']}; Marke Pantasy laut Lootstore-Produktdaten.")
+                st.markdown(f"[Lootstore-Produkt prüfen]({candidate['url']})")
+                if st.button('✓ Lootstore-Zuordnung bestätigen', key=f'loot_confirm_{candidate["db_id"]}_{i}'):
+                    try:
+                        clean = db_store.confirm_match(DB_URL, candidate['db_id'], 'Lootstore', candidate['url'])
+                        current = st.session_state.products
+                        mask = current['db_id'].astype(str) == candidate['db_id']
+                        current.loc[mask, 'lootstore_url'] = clean
+                        st.session_state.products = current
+                        st.session_state.lootstore_comparison = [c for c in loot_candidates if c['db_id'] != candidate['db_id']]
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f'Zuordnung fehlgeschlagen: {exc}')
+        if not loot_candidates:
+            st.info('Keine offenen Pantasy-Vorschläge vorhanden. SKU- und Herstellerdaten in Lootstore prüfen.')
 
 with st.expander('📦 Brickmo-Herstellerkategorien indexieren (V28.11.21)', expanded=False):
     st.caption('Ausschließlich offizielle Herstellerkategorien. Themenwelten und freie Kategorie-URLs sind für Indexierung und Vorschläge deaktiviert. Bestehende Zuordnungen bleiben erhalten.')
