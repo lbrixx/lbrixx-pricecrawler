@@ -50,32 +50,58 @@ def score(row, title, link):
     if similarity>=0.5: reasons.append('Name')
     return points,', '.join(reasons)
 
-def search(row,merchant,timeout=12):
-    """Uses public shop search; fail closed when site changes or throttles."""
+def search(row, merchant, timeout=12):
+    """Search Shopify predictive JSON first, then regular HTML; never auto-assign."""
     sku=str(row.get('sku','')).strip()
     ean=re.sub(r'\D','',str(row.get('ean','')))
     terms=sku_variants(sku) or ([ean] if ean else [])
-    if not terms: return [],'Keine SKU oder EAN vorhanden'
+    if not terms: return [], 'Keine SKU oder EAN vorhanden'
     base='https://lootstore.de' if merchant=='Lootstore' else 'https://www.brickmo.com'
-    found={}; problems=[]
+    found={}; problems=[]; counts=[]
+    session=requests.Session()
+    session.headers.update({'User-Agent':'Mozilla/5.0 (compatible; LBrixxProductMatcher/1.0)', 'Accept-Language':'de-DE,de;q=0.9'})
+    def add(link,title,source):
+        link=candidate_url(merchant,urljoin(base,link))
+        if not link:return
+        title=str(title or '').strip()
+        points,reason=score(row,title,link)
+        if points>=55 and (link not in found or points>found[link]['score']):
+            found[link]={'url':link,'title':title[:160] or link.rsplit('/',1)[-1], 'score':points,'reason':reason,'source':source}
     for term in terms:
-        endpoint=(base+'/search?q='+quote(term)) if merchant=='Lootstore' else (base+'/search?sSearch='+quote(term))
+        if merchant=='Lootstore':
+            # Shopify predictive search exposes product URLs in structured JSON.
+            try:
+                r=session.get(base+'/search/suggest.json',params={'q':term,'resources[type]':'product','resources[limit]':'10'},timeout=timeout)
+                if r.ok:
+                    payload=r.json()
+                    products=payload.get('resources',{}).get('results',{}).get('products',[])
+                    counts.append(f'{term}: Shopify-Suche {len(products)} Produkte')
+                    for product in products:
+                        add(product.get('url',''),product.get('title',''),'Shopify-Produktsuche')
+                else:problems.append(f'{term}: Shopify-Suche HTTP {r.status_code}')
+            except (requests.RequestException,ValueError,TypeError,AttributeError) as exc:
+                problems.append(f'{term}: Shopify-Suche {str(exc)[:110]}')
+        endpoint=(base+'/search?q='+quote(term)+'&type=product') if merchant=='Lootstore' else (base+'/search?sSearch='+quote(term))
         try:
-            r=requests.get(endpoint,headers={'User-Agent':'Mozilla/5.0','Accept-Language':'de-DE,de;q=0.9'},timeout=timeout)
-            if r.status_code in (403,429):
-                problems.append(f'HTTP {r.status_code} für {term}'); continue
-            r.raise_for_status()
+            r=session.get(endpoint,timeout=timeout)
+            if not r.ok:
+                problems.append(f'{term}: HTML-Suche HTTP {r.status_code}');continue
             soup=BeautifulSoup(r.text,'html.parser')
+            count=0
             for a in soup.select('a[href]'):
                 link=candidate_url(merchant,urljoin(base,a.get('href','')))
-                if not link: continue
+                if not link:continue
+                count+=1
                 title=a.get('title','').strip() or a.get_text(' ',strip=True)
                 if len(title)<8:
                     parent=a.find_parent(['article','li','div'])
-                    if parent: title=parent.get_text(' ',strip=True)[:180]
-                points,reason=score(row,title,link)
-                if points>=60 and (link not in found or points>found[link]['score']):
-                    found[link]={'url':link,'title':title[:160],'score':points,'reason':reason}
+                    if parent:title=parent.get_text(' ',strip=True)[:180]
+                add(link,title,'HTML-Suche')
+            counts.append(f'{term}: HTML-Suche {count} Produktlinks')
         except requests.RequestException as exc:
-            problems.append(f'{term}: {str(exc)[:90]}')
-    return sorted(found.values(),key=lambda x:-x['score'])[:3], '; '.join(problems)
+            problems.append(f'{term}: HTML-Suche {str(exc)[:110]}')
+    results=sorted(found.values(),key=lambda x:-x['score'])[:5]
+    # Diagnostic text shown to the user even when the merchant returns no candidates.
+    detail='; '.join(counts+problems)
+    if not results: detail=('Keine ausreichend passenden Treffer. '+detail).strip()
+    return results,detail

@@ -411,7 +411,7 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
             st.warning('Keine hinreichend eindeutigen Treffer gefunden. Es wurde nichts zugeordnet.')
         issues=st.session_state.get('match_issues',[])
         if issues:
-            with st.expander(f'{len(issues)} Suchhinweise / Fehler'):
+            with st.expander(f'{len(issues)} Suchdiagnosen (auch ohne Treffer)', expanded=not bool(suggestions)):
                 for issue in issues: st.caption(issue)
 
 st.subheader('Artikelübersicht')
