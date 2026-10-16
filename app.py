@@ -400,6 +400,31 @@ with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
             else:
                 st.info('Keine Beispiel-URLs verfügbar. Bitte den Brickmo-Katalog erneut aktualisieren.')
 
+with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False):
+    st.caption('Gezielter Test einer Brickmo-Kategorieseite. Nur exakte SKU-Kandidaten werden auf der Produktseite überprüft und anschließend im Index gespeichert. Keine automatische Produktzuordnung.')
+    category_sku=st.text_input('Herstellerartikelnummer für Kategoriesuche', value='FO9054', key='category_sku')
+    category_url=st.text_input('Brickmo-Kategorie', value=brickmo_index.CATEGORY_START, key='category_url')
+    category_pages=st.selectbox('Maximal zu prüfende Kategorieseiten', [2,5,8,12],index=1,key='category_pages')
+    if st.button('Kategoriesuche starten',key='category_search'):
+        try:
+            with st.spinner('Kategorieseiten und exakte SKU-Kandidaten werden geprüft…'):
+                st.session_state.category_report=brickmo_index.crawl_category_for_sku(
+                    DB_URL,category_sku,category_url,max_pages=category_pages)
+        except Exception as exc:
+            st.error(f'Kategoriesuche fehlgeschlagen: {exc}')
+    category_report=st.session_state.get('category_report')
+    if category_report:
+        st.write(f"{category_report['pages']} Seiten geprüft · {category_report['links']} Produktlinks gelesen · {category_report['candidates']} SKU-Kandidaten · {len(category_report['matches'])} bestätigte Treffer")
+        if category_report['matches']:
+            for match in category_report['matches']:
+                st.success(f"{match['title']} – SKU auf Produktseite bestätigt")
+                st.link_button('Brickmo-Produkt öffnen',match['url'])
+            st.info('Die bestätigten Treffer sind jetzt im Brickmo-Index gespeichert. Bitte die Zuordnung anschließend über die Schnellzuordnung selbst bestätigen.')
+        else:
+            st.warning('Kein verifizierter Treffer in den geprüften Kategorieseiten. Dies bedeutet nicht, dass der Artikel nicht existiert.')
+        with st.expander('Kategoriesuche – Diagnose',expanded=True):
+            for note in category_report['notes']: st.caption(note)
+
 with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
     st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
     mc1,mc2=st.columns(2)

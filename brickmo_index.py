@@ -186,3 +186,103 @@ def lookup(db_url, sku, limit=5):
     results = [{'url':r['product_url'],'title':r['product_title'], 'score':95,
                 'reason':'Exakte SKU im Brickmo-Katalog (Link prüfen)', 'source':'Brickmo-Sitemap'} for r in rows]
     return results, f'{total} indexierte Brickmo-Produktlinks; {len(results)} exakte Treffer für {key}'
+
+# Targeted, bounded category crawl. Product links are extracted from category
+# listings; only exact SKU candidates are considered, and their product detail
+# pages are checked before insertion. Never treat a listing hit as verified.
+from bs4 import BeautifulSoup
+from urllib.parse import urlencode
+
+CATEGORY_START = 'https://www.brickmo.com/themenwelt/architektur/'
+CATEGORY_HEADERS = {'User-Agent':'Mozilla/5.0 (compatible; LBrixxPriceCrawler/1.0)', 'Accept-Language':'de-DE,de;q=0.9'}
+
+def _sku_tokens(sku):
+    key = normalized_sku(sku)
+    m = re.fullmatch(r'FO(\d{4,})', key)
+    return {key, 'F'+m.group(1)} if m else {key}
+
+def _detail_sku_confirmed(soup, sku):
+    """Check SKU in the product detail content, not unrelated recommendations."""
+    main = soup.select_one('.product--details') or soup.select_one('.product--detail') or soup.select_one('.product-details') or soup.select_one('main')
+    if main is None: return False
+    for node in main.select('script,nav,footer,aside,.product--recommendation,.product-slider,.product--crossselling'):
+        node.decompose()
+    content = main.get_text(' ', strip=True).upper()
+    for token in _sku_tokens(sku):
+        if re.search(r'(?<![A-Z0-9])'+re.escape(token)+r'(?![A-Z0-9])',content):
+            return True
+    return False
+
+def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8, timeout=15):
+    """Find an exact SKU on public Brickmo category pages, no automatic matching.
+
+    Bounded to max_pages and same-host URLs. The caller sees diagnostics even
+    when Brickmo's listing HTML omits products or is blocked.
+    """
+    target = normalized_sku(sku)
+    if not target: return {'matches':[], 'notes':['Artikelnummer fehlt.'], 'pages':0, 'links':0}
+    parsed = urlparse(category_url)
+    if parsed.scheme != 'https' or parsed.hostname not in ('www.brickmo.com','brickmo.com'):
+        raise ValueError('Nur HTTPS-Kategorieseiten von brickmo.com erlaubt.')
+    session = requests.Session()
+    session.headers.update(CATEGORY_HEADERS)
+    queue = deque([category_url])
+    visited = set(); candidates = {}; notes = []; scanned_links = 0
+    while queue and len(visited) < max(1,min(int(max_pages),20)):
+        page = queue.popleft()
+        if page in visited: continue
+        visited.add(page)
+        try:
+            response = session.get(page,timeout=timeout)
+            notes.append(f'Kategorieseite {len(visited)}: HTTP {response.status_code} – {page}')
+            if not response.ok: continue
+            soup = BeautifulSoup(response.text,'html.parser')
+            page_links = 0
+            for a in soup.select('a[href]'):
+                href = urljoin(page, a.get('href',''))
+                pu = urlparse(href)
+                if pu.hostname not in ('www.brickmo.com','brickmo.com'): continue
+                if re.search(r'/\d{3,}/[^/]+/?$',pu.path):
+                    page_links += 1
+                    if exact_sku_in_url(href,target):
+                        clean = canonical(href)
+                        candidates[clean] = href
+                # Follow category pagination only, not arbitrary site links.
+                if ('page=' in pu.query or 'p=' in pu.query) and pu.path.rstrip('/') == parsed.path.rstrip('/'):
+                    if href not in visited and href not in queue and len(queue) < 20:
+                        queue.append(href)
+            scanned_links += page_links
+            notes.append(f'  {page_links} Produktlinks, {len(candidates)} exakte SKU-URL-Kandidaten')
+            # Shopware pagination often uses ?p=N without an explicit next link.
+            if not queue and page_links and len(visited) < max_pages:
+                n = len(visited)+1
+                next_page = category_url + ('&' if '?' in category_url else '?') + urlencode({'p':n})
+                if next_page not in visited: queue.append(next_page)
+        except requests.RequestException as exc:
+            notes.append(f'Kategorie: {type(exc).__name__}: {str(exc)[:130]}')
+    verified = []
+    for clean, url in list(candidates.items())[:12]:
+        try:
+            r = session.get(url, timeout=timeout)
+            if not r.ok:
+                notes.append(f'Produktseite HTTP {r.status_code}: {url}')
+                continue
+            soup = BeautifulSoup(r.text,'html.parser')
+            if not _detail_sku_confirmed(soup,target):
+                notes.append(f'Produktdetail-SKU nicht bestätigt: {url}')
+                continue
+            title = soup.select_one('h1')
+            title = title.get_text(' ',strip=True) if title else urlparse(url).path.rsplit('/',1)[-1].replace('-',' ')
+            verified.append({'url':clean,'title':title,'score':100,'reason':'SKU im Produktlink und Produktdetail bestätigt','source':'Brickmo-Kategorie'})
+        except requests.RequestException as exc:
+            notes.append(f'Produktprüfung: {type(exc).__name__}: {str(exc)[:100]}')
+    if verified:
+        with psycopg.connect(db_url,connect_timeout=12) as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA)
+                cur.executemany('''INSERT INTO public.brickmo_catalog(product_url,manufacturer_sku,product_title,source_sitemap,indexed_at)
+                    VALUES (%s,%s,%s,%s,now()) ON CONFLICT(product_url) DO UPDATE SET
+                    manufacturer_sku=excluded.manufacturer_sku,product_title=excluded.product_title,
+                    source_sitemap=excluded.source_sitemap,indexed_at=now()''',
+                    [(v['url'],target,v['title'],'Brickmo-Kategoriesuche') for v in verified])
+    return {'matches':verified,'notes':notes,'pages':len(visited),'links':scanned_links,'candidates':len(candidates)}
