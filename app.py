@@ -252,7 +252,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.39 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.49 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -1359,39 +1359,84 @@ else:
         query = urlencode({'sort': k, 'dir': next_dir, 'view': article_view, 'brand': brand_selection})
         return f'<th><a href="?{html.escape(query, quote=True)}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
     table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
+    # Refresh controls directly above the three competitor price columns.
+    # Streamlit widgets cannot be embedded in the sortable HTML table itself.
+    st.markdown('#### Preise aktualisieren')
+    st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Mindestens 2 Sekunden zwischen Shop-Anfragen; HTTP 429 stoppt die jeweilige Serie. Zeitangaben UTC.')
+    left, a, b, c = st.columns([5, 1.25, 1.25, 1.25], gap='small')
+    with left:
+        st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv')
+    with a: brickmo_update=st.button('🔄 Brickmo',use_container_width=True)
+    with b: loot_update=st.button('🔄 Lootstore',use_container_width=True)
+    with c: lumi_update=st.button('🔄 Lumibricks',use_container_width=True)
     st.html(table_html)
     st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel in UTC.')
-    st.markdown('#### Preise aktualisieren')
-    st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Zwischen Shop-Anfragen liegen mindestens 2 Sekunden. HTTP 429 stoppt die jeweilige Serie. Zeitangaben sind UTC.')
-    a,b,c=st.columns([1,1,1])
-    with a: brickmo_update=st.button('🔄 Brickmo komplett',use_container_width=True)
-    with b: loot_update=st.button('🔄 Lootstore komplett',use_container_width=True)
-    with c: st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv',use_container_width=True)
     active=df.loc[~deleted_mask & ~hidden_mask]
     selectable={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":int(i) for i,r in active.iterrows()}
     chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
-    provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Beide'])
+    provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Lumibricks','Brickmo und Lootstore','Alle drei'])
     one_update=st.button('🔄 Gewählten Artikel aktualisieren')
+    if lumi_update:
+        lumi_active=df.loc[~deleted_mask & ~hidden_mask]
+        lumi_rows=[r for _,r in lumi_active.iterrows() if str(r.lumibricks_url).strip() and str(r.db_id).strip()]
+        if not lumi_rows:
+            st.info('Lumibricks: Keine aktiven Artikel mit hinterlegtem Produktlink.')
+        else:
+            st.write(f'Lumibricks: {len(lumi_rows)} Produktseiten werden geprüft.')
+            lumi_progress=st.progress(0)
+            lumi_ok=lumi_failed=0
+            for pos,r in enumerate(lumi_rows):
+                try:
+                    lumibricks_store.record(DB_URL,r.db_id,str(r.lumibricks_url))
+                    lumi_ok+=1
+                except Exception as exc:
+                    lumi_failed+=1
+                    st.warning(f'Lumibricks {r.sku}: {exc}')
+                    if '429' in str(exc):
+                        st.warning('Lumibricks: HTTP 429 – Serie abgebrochen.')
+                        lumi_progress.progress((pos+1)/len(lumi_rows))
+                        break
+                lumi_progress.progress((pos+1)/len(lumi_rows))
+                if pos+1<len(lumi_rows): time.sleep(2)
+            st.success(f'Lumibricks: {lumi_ok} erfolgreich, {lumi_failed} fehlgeschlagen. Preise direkt in PostgreSQL gespeichert.')
+            try:
+                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+            except Exception as exc:
+                st.warning(f'Preise gespeichert, aber Ansicht konnte nicht neu geladen werden: {exc}')
+            st.rerun()
     if brickmo_update or loot_update or one_update:
         new=df.copy()
-        shops=['brickmo'] if brickmo_update else ['lootstore'] if loot_update else ['brickmo','lootstore'] if provider=='Beide' else [provider.lower()]
+        shops=['brickmo'] if brickmo_update else ['lootstore'] if loot_update else ['brickmo','lootstore','lumibricks'] if provider=='Alle drei' else ['brickmo','lootstore'] if provider=='Brickmo und Lootstore' else [provider.lower()]
         if one_update and chosen=='Bitte Artikel wählen':
             st.warning('Bitte zunächst einen Artikel auswählen.')
         else:
             changed_indices=[]
             for shop in shops:
-                url_field='brickmo_url' if shop=='brickmo' else 'lootstore_url'
+                url_field={'brickmo':'brickmo_url','lootstore':'lootstore_url','lumibricks':'lumibricks_url'}[shop]
                 subset=[selectable[chosen]] if one_update else list(active.index)
                 indices=[i for i in subset if str(new.at[i,url_field]).strip()]
                 if not indices:
                     st.info(f'{shop}: Keine hinterlegten Links für die Auswahl.')
                     continue
                 st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
-                new,ok,failed=update_prices(new,shop,indices)
-                changed_indices.extend(indices)
+                if shop=='lumibricks':
+                    ok=failed=0
+                    for i in indices:
+                        try:
+                            lumibricks_store.record(DB_URL,new.at[i,'db_id'],str(new.at[i,'lumibricks_url']))
+                            ok+=1
+                        except Exception as exc:
+                            failed+=1
+                            st.warning(f'Lumibricks {new.at[i,"sku"]}: {exc}')
+                    # Lumibricks persists its own current prices and history in PostgreSQL.
+                else:
+                    new,ok,failed=update_prices(new,shop,indices)
+                    changed_indices.extend(indices)
                 st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
             try:
-                save_changed_rows(new,changed_indices); st.success('Preisprüfung gespeichert.'); st.rerun()
+                if changed_indices: save_changed_rows(new,changed_indices)
+                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                st.success('Preisprüfung gespeichert.'); st.rerun()
             except Exception as exc: st.error(f'Speichern fehlgeschlagen: {exc}')
 
     st.caption('Zum Bearbeiten, Ausblenden oder Löschen bitte die Aktionen direkt am Anfang der jeweiligen Tabellenzeile verwenden.')
