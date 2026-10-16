@@ -425,6 +425,50 @@ with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False
         with st.expander('Kategoriesuche – Diagnose',expanded=True):
             for note in category_report['notes']: st.caption(note)
 
+with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expanded=False):
+    st.caption('Erkennt die Anzahl der Kategorieseiten automatisch, erfasst eindeutige Produktlinks und speichert klar erkennbare Artikelnummern im Supabase-Index. Produktzuordnungen werden nicht verändert.')
+    full_category_url = st.text_input('Kategorie für vollständigen Index', value=brickmo_index.CATEGORY_START, key='full_category_url')
+    st.caption('Sicherheitsgrenze: maximal 60 Seiten pro Durchlauf. Nur eindeutig aus URLs erkennbare SKUs werden indexiert.')
+    if st.button('Kategorie vollständig einlesen', key='full_category_run'):
+        try:
+            with st.spinner('Kategorieseiten werden eingelesen und der Index wird aktualisiert…'):
+                st.session_state.full_category_report = brickmo_index.index_category(DB_URL, full_category_url)
+        except Exception as exc:
+            st.error(f'Katalogimport fehlgeschlagen: {exc}')
+    full_report = st.session_state.get('full_category_report')
+    if full_report:
+        st.write(f"{full_report['pages_checked']} von {full_report['pages_detected']} erkannten Seiten geprüft · {full_report['links_found']} eindeutige Produktlinks · {full_report['sku_links']} SKU-Links gespeichert")
+        if not full_report['complete']:
+            st.warning('Nicht alle Seiten konnten verarbeitet werden. Bitte die Diagnose prüfen.')
+        elif full_report['saved']:
+            st.success('Katalogindex aktualisiert. Bestehende LBrixx-Zuordnungen bleiben unverändert.')
+        else:
+            st.warning('Keine eindeutigen SKU-Links erkannt. Es wurden keine Zuordnungen vorgenommen.')
+        with st.expander('Index-Diagnose', expanded=False):
+            for note in full_report['notes']: st.caption(note)
+            st.write('Beispiel-SKUs:', ', '.join(full_report['sample_skus']) or 'Keine')
+        if st.button('Mit LBrixx-Artikeln abgleichen', key='full_category_compare'):
+            try:
+                products_to_match = st.session_state.products.copy()
+                products_to_match = products_to_match[(products_to_match['deleted']!='1') & (products_to_match['brickmo_url'].astype(str).str.strip()=='')]
+                indexed = brickmo_index.batch_match_skus(DB_URL, products_to_match['sku'].tolist())
+                comparison = []
+                for _, product in products_to_match.iterrows():
+                    key = brickmo_index.normalized_sku(product['sku'])
+                    for match in indexed.get(key, []):
+                        comparison.append({'SKU':str(product['sku']), 'LBrixx-Artikel':str(product['description']),
+                            'Brickmo-Produkt':match['product_title'], 'Brickmo-Link':match['product_url'],
+                            'Quelle':match['source_sitemap']})
+                st.session_state.full_category_comparison = comparison
+            except Exception as exc:
+                st.error(f'Abgleich fehlgeschlagen: {exc}')
+        comparison = st.session_state.get('full_category_comparison')
+        if comparison is not None:
+            st.write(f'{len(comparison)} mögliche Zuordnungsvorschläge (ohne automatische Speicherung).')
+            if comparison:
+                st.dataframe(pd.DataFrame(comparison), use_container_width=True, hide_index=True)
+            st.caption('Zur endgültigen Zuordnung bitte die Schnellzuordnung verwenden und jeden Vorschlag bestätigen.')
+
 with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
     st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
     mc1,mc2=st.columns(2)

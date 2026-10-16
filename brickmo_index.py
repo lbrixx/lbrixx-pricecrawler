@@ -292,3 +292,134 @@ def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8
                     source_sitemap=excluded.source_sitemap,indexed_at=now()''',
                     [(v['url'],target,v['title'],'Brickmo-Kategoriesuche') for v in verified])
     return {'matches':verified,'notes':notes,'pages':checked_pages,'links':scanned_links,'candidates':len(candidates)}
+
+
+# V28.7: Category-wide index; no modification of existing LBrixx offers.
+def _category_sku_from_url(url):
+    """Only return a SKU if it is explicitly encoded in a product slug.
+
+    Unknown brands remain unindexed rather than receiving guessed identifiers.
+    """
+    path = unquote(urlparse(url).path).upper()
+    found = re.findall(r'(?<![A-Z0-9])FO?\d{4,}(?![A-Z0-9])', path)
+    if found:
+        return normalized_sku(found[-1])
+    # COBI is represented by a brand prefix and numeric SKU in Brickmo slugs.
+    found = re.findall(r'(?<![A-Z0-9])COBI[-_ ](\d{3,6})(?![A-Z0-9])', path)
+    if found:
+        return 'COBI-' + found[-1]
+    return ''
+
+
+def _last_category_page(soup, category_path, safety_cap=60):
+    """Read explicit pagination links, never follow fragment or filter links."""
+    pages = [1]
+    for a in soup.select('a[href]'):
+        href = a.get('href', '')
+        parsed = urlparse(href)
+        if parsed.path and parsed.path.rstrip('/') != category_path.rstrip('/'):
+            continue
+        for raw in parse_qs(parsed.query).get('p', []):
+            if raw.isdigit():
+                number = int(raw)
+                if 1 <= number <= safety_cap:
+                    pages.append(number)
+    return max(pages)
+
+
+def index_category(db_url, category_url=CATEGORY_START, max_pages=60, timeout=15):
+    """Index all confidently identifiable SKU URLs from one Brickmo category.
+
+    A URL-derived SKU is a suggestion, not a verified product-detail SKU.
+    No existing catalog entries are deleted. LBrixx product mappings remain unchanged.
+    """
+    from urllib.parse import urlunparse
+    parsed = urlparse(category_url)
+    if parsed.scheme != 'https' or parsed.hostname not in ('www.brickmo.com', 'brickmo.com'):
+        raise ValueError('Nur HTTPS-Kategorieseiten von brickmo.com erlaubt.')
+    base = urlunparse(('https', 'www.brickmo.com', parsed.path.rstrip('/') + '/', '', '', ''))
+    cap = max(1, min(int(max_pages), 60))
+    session = requests.Session()
+    session.headers.update(CATEGORY_HEADERS)
+    notes, records, all_links = [], {}, set()
+    total_pages = None
+    checked = 0
+    for page_no in range(1, cap + 1):
+        if total_pages is not None and page_no > total_pages:
+            break
+        url = base if page_no == 1 else f'{base}?p={page_no}'
+        try:
+            response = session.get(url, timeout=timeout)
+            if not response.ok:
+                notes.append(f'Seite {page_no}: HTTP {response.status_code}')
+                break
+            soup = BeautifulSoup(response.text, 'html.parser')
+            if total_pages is None:
+                total_pages = _last_category_page(soup, parsed.path, safety_cap=60)
+                notes.append(f'Automatisch erkannte Seitenanzahl: {total_pages}')
+            new = 0
+            for a in soup.select('a[href]'):
+                href = urljoin(url, a.get('href', ''))
+                pu = urlparse(href)
+                if pu.hostname not in ('www.brickmo.com', 'brickmo.com'):
+                    continue
+                if not re.search(r'/\d{3,}/[^/]+/?$', pu.path):
+                    continue
+                clean = canonical(href)
+                if clean in all_links:
+                    continue
+                all_links.add(clean)
+                new += 1
+                sku = _category_sku_from_url(href)
+                if sku:
+                    slug = unquote(pu.path.rsplit('/', 1)[-1]).replace('-', ' ')
+                    records[clean] = (clean, sku, slug, 'Brickmo-Kategorie: SKU aus URL (unbestätigt)')
+            checked += 1
+            notes.append(f'Seite {page_no}: {new} neue Produktlinks; {len(all_links)} insgesamt; {len(records)} SKU-Links')
+            if new == 0:
+                notes.append('Keine neuen Produktlinks, Kategorie beendet.')
+                break
+        except requests.RequestException as exc:
+            notes.append(f'Seite {page_no}: {type(exc).__name__}: {str(exc)[:100]}')
+            break
+    if records:
+        with psycopg.connect(db_url, connect_timeout=12) as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA)
+                # Existing entries are kept; fresh links updated in a single transaction.
+                cur.executemany("""INSERT INTO public.brickmo_catalog
+                    (product_url,manufacturer_sku,product_title,source_sitemap,indexed_at)
+                    VALUES (%s,%s,%s,%s,now())
+                    ON CONFLICT(product_url) DO UPDATE SET
+                    manufacturer_sku=excluded.manufacturer_sku,
+                    product_title=excluded.product_title,
+                    source_sitemap=CASE
+                        WHEN public.brickmo_catalog.source_sitemap='Brickmo-Kategoriesuche'
+                        THEN public.brickmo_catalog.source_sitemap
+                        ELSE excluded.source_sitemap END,
+                    indexed_at=now()""", list(records.values()))
+    return {'pages_detected':total_pages or 1,'pages_checked':checked,
+            'links_found':len(all_links),'sku_links':len(records),
+            'saved':len(records),'notes':notes,
+            'complete':checked >= (total_pages or 1),
+            'sample_skus':sorted(set(row[1] for row in records.values()))[:20]}
+
+
+def batch_match_skus(db_url, skus):
+    """One read-only DB query to compare imported LBrixx SKUs with the index."""
+    keys = list({normalized_sku(x) for x in skus if str(x or '').strip()})
+    if not keys:
+        return {}
+    with psycopg.connect(db_url, connect_timeout=12, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.brickmo_catalog') AS t")
+            if not cur.fetchone()['t']:
+                return {}
+            cur.execute("""SELECT manufacturer_sku,product_url,product_title,source_sitemap
+                FROM public.brickmo_catalog WHERE manufacturer_sku = ANY(%s)
+                ORDER BY indexed_at DESC""", (keys,))
+            rows = cur.fetchall()
+    results = {}
+    for row in rows:
+        results.setdefault(row['manufacturer_sku'], []).append(dict(row))
+    return results
