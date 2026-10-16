@@ -88,6 +88,19 @@ def brickmo_match_keys(product):
                 values.append('W' + code)
             elif re.fullmatch(r'W\d{3,7}', code):
                 values.append(code[1:])
+    # Mattel Brick Shop: apply the retailer suffix to ALL Mattel SKUs,
+    # not only JFT16 or a restricted letter/digit pattern.
+    # Aliases are for searching only; never change the Odoo SKU.
+    if brand in ('mattel brick shop', 'mattel'):
+        for raw in list(values):
+            code = brickmo_index.normalized_sku(raw)
+            if not code or not re.fullmatch(r'[A-Z0-9_-]+', code):
+                continue
+            if code.endswith('_MA'):
+                if len(code) > 3:
+                    values.append(code[:-3])
+            else:
+                values.append(code + '_MA')
     return list(dict.fromkeys(brickmo_index.normalized_sku(x) for x in values if x))
 
 def valid_url(url):
