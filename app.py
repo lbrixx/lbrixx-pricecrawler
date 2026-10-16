@@ -364,6 +364,10 @@ with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expa
     pending=pending[(pending['deleted']!='1') & (pending[url_col].astype(str).str.strip()=='')]
     pending=pending[(pending['sku'].astype(str).str.strip()!='') | (pending['ean'].astype(str).str.strip()!='')]
     st.caption(f'{len(pending)} Artikel ohne {match_merchant}-Zuordnung mit SKU/EAN')
+    match_sku=st.text_input('Gezielt nach Artikelnummer suchen (optional)', placeholder='z. B. F9043', key='match_sku')
+    if match_sku.strip():
+        pending=pending[pending['sku'].astype(str).str.upper().str.strip()==match_sku.strip().upper()]
+        st.caption(f'{len(pending)} passende Artikel in deiner Datenbank')
     if st.button('Passende Shop-Artikel suchen',key='match_start',type='primary'):
         results=[]; issues=[]
         subset=pending.head(int(match_limit))
