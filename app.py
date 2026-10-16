@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.37 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.38 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -985,63 +985,72 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                         suggestions.append((str(product.db_id), str(product.sku),
                                             hit['url'], hit['title'], key))
                         break
-            # Fall back to the targeted Shopify search for missing manufacturer SKUs.
-            # Limit the work per click to avoid overloading the shop. Progress is
-            # retained in the Streamlit session for subsequent clicks.
+            # Search every unresolved manufacturer SKU in one controlled run.
+            # Checkpoints are stored in PostgreSQL so a rerun or restart can resume.
             checked_skus = st.session_state.setdefault('lumi_target_checked', {})
+            try:
+                checked_skus.update(lumibricks_store.load_search_progress(DB_URL))
+                persistent_progress = True
+            except Exception as exc:
+                persistent_progress = False
+                diagnostics.append(f'Fortschritt nur in dieser Sitzung gespeichert: {exc}')
             targeted_checks = 0
             targeted_hits = 0
-            rate_limited = False
-            max_targeted = 8
+            rate_limited = any('429' in str(d) for d in diagnostics)
             suggested_ids = {entry[0] for entry in suggestions}
+            # Prefer explicit F manufacturer codes; deduplicate requests across Odoo rows.
+            pending = {}
             for _, product in lumi_products.iterrows():
-                if targeted_checks >= max_targeted or rate_limited:
-                    break
                 pid = str(product.db_id)
                 if str(product.lumibricks_url).strip() or pid in suggested_ids:
                     continue
-                keys = list(dict.fromkeys(
-                    lumibricks_store.sku_key(candidate)
-                    for candidate in brickmo_match_keys(product)
-                    if lumibricks_store.sku_key(candidate)
-                ))
-                # Prefer explicit manufacturer F-codes over generic numeric SKUs.
-                raw_keys = brickmo_match_keys(product)
-                search_codes = list(dict.fromkeys(
-                    str(candidate).strip().upper()
-                    for candidate in raw_keys
-                    if str(candidate).strip().upper().startswith('F')
-                    and lumibricks_store.sku_key(candidate) not in catalog
-                ))
-                if not search_codes:
-                    continue
-                for code in search_codes:
-                    if targeted_checks >= max_targeted or rate_limited:
-                        break
+                keys = set(lumibricks_store.sku_key(x) for x in brickmo_match_keys(product))
+                for candidate in brickmo_match_keys(product):
+                    code = str(candidate).strip().upper()
                     normalized = lumibricks_store.sku_key(code)
-                    if normalized in checked_skus:
-                        hit = checked_skus[normalized]
-                    else:
-                        with st.spinner(f'Fehlende Lumibricks-SKU {code} gezielt prüfen…'):
-                            hit, details = lumibricks_store.targeted_sku_search(code, max_product_checks=3)
-                        targeted_checks += 1
-                        if any('429' in str(detail) for detail in details):
-                            rate_limited = True
-                            diagnostics.append('HTTP 429: Gezielte Suche sofort beendet; später fortsetzen.')
-                            break
-                        checked_skus[normalized] = hit
-                        if targeted_checks < max_targeted:
-                            time.sleep(2)
-                    if hit and normalized in keys:
-                        suggestions.append((pid, str(product.sku), hit['url'], hit['title'], code))
-                        suggested_ids.add(pid)
-                        catalog[normalized] = hit
-                        targeted_hits += 1
+                    if code.startswith('F') and normalized not in catalog and normalized in keys:
+                        pending.setdefault(normalized, []).append((pid, str(product.sku), code))
+            pending_keys = list(pending)
+            progress = st.progress(0, text=f'Gezielte Lumibricks-Nachsuche: 0 / {len(pending_keys)} SKUs') if pending_keys else None
+            processed = 0
+            for normalized in pending_keys:
+                if rate_limited:
+                    break
+                if normalized in checked_skus:
+                    hit = checked_skus[normalized]
+                else:
+                    with st.spinner(f'Lumibricks-SKU {normalized} prüfen…'):
+                        hit, details = lumibricks_store.targeted_sku_search(normalized, max_product_checks=3)
+                    targeted_checks += 1
+                    if any('429' in str(detail) for detail in details):
+                        rate_limited = True
+                        diagnostics.append('HTTP 429: Suche unterbrochen. Gespeicherter Fortschritt bleibt erhalten; später erneut starten.')
                         break
+                    checked_skus[normalized] = hit
+                    if persistent_progress:
+                        try:
+                            lumibricks_store.save_search_progress(DB_URL, normalized, hit)
+                        except Exception as exc:
+                            persistent_progress = False
+                            diagnostics.append(f'Datenbank-Checkpoint fehlgeschlagen: {exc}')
+                    time.sleep(2)
+                if hit:
+                    catalog[normalized] = hit
+                    for pid, sku, code in pending[normalized]:
+                        if pid not in suggested_ids:
+                            suggestions.append((pid, sku, hit['url'], hit['title'], code))
+                            suggested_ids.add(pid)
+                            targeted_hits += 1
+                processed += 1
+                if progress:
+                    progress.progress(processed / len(pending_keys), text=f'Gezielte Lumibricks-Nachsuche: {processed} / {len(pending_keys)} SKUs')
+            remaining = len(pending_keys) - processed
+            if progress:
+                progress.empty()
             st.session_state['lumi_catalog_diagnostic'] = catalog
             st.session_state['lumi_suggestions'] = suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
-            st.caption(f'Gezielte Nachsuche: {targeted_checks} neue SKU-Prüfungen · {targeted_hits} zusätzliche Treffer · maximal {max_targeted} Prüfungen pro Klick. Weitere offene SKUs beim nächsten Klick prüfen.')
+            st.caption(f'Gezielte Nachsuche: {targeted_checks} neue SKU-Prüfungen · {targeted_hits} zusätzliche Treffer · {remaining} noch offen' + (' · bei HTTP 429 unterbrochen' if rate_limited else '') + (' · Fortschritt in PostgreSQL gespeichert' if persistent_progress else ' · Fortschritt nur in dieser Sitzung'))
             for message in diagnostics: st.warning(message)
         with st.expander('🔬 Lumibricks-SKU-Einzeldiagnose', expanded=False):
             st.caption('Prüft Odoo-SKU, Herstellerartikelnummer aus der Beschreibung und den zuletzt eingelesenen Lumibricks-Katalog. Keine Datenbankänderung.')

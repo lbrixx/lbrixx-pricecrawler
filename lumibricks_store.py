@@ -270,3 +270,36 @@ def targeted_sku_search(sku, max_product_checks=6):
         time.sleep(1.5)
     diagnostics.append(f'{checked} Produktdatensätze verifiziert; kein eindeutiger SKU-Treffer')
     return None, diagnostics
+
+
+# Dedicated search checkpoint table. Does not modify existing offers or price history.
+def _ensure_search_progress(cur):
+    cur.execute("""CREATE TABLE IF NOT EXISTS public.lumibricks_search_progress (
+        sku TEXT PRIMARY KEY,
+        product_url TEXT,
+        title TEXT,
+        source TEXT,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""")
+
+def load_search_progress(db_url):
+    """Return recent verified matches and misses (misses expire after seven days)."""
+    with connect(db_url) as c, c.cursor(row_factory=dict_row) as cur:
+        _ensure_search_progress(cur)
+        cur.execute("""SELECT sku, product_url, title, source FROM public.lumibricks_search_progress
+            WHERE product_url IS NOT NULL OR checked_at > NOW() - INTERVAL '7 days'""")
+        rows = cur.fetchall()
+    return {r['sku']: ({'url': r['product_url'], 'title': r['title'] or '',
+                        'sku': r['sku'], 'source': r['source'] or 'Gespeicherte Suche'}
+                       if r['product_url'] else None) for r in rows}
+
+def save_search_progress(db_url, sku, hit):
+    """Save a single completed SKU lookup; do not save 429 responses."""
+    with connect(db_url) as c, c.cursor() as cur:
+        _ensure_search_progress(cur)
+        cur.execute("""INSERT INTO public.lumibricks_search_progress(sku, product_url, title, source, checked_at)
+            VALUES (%s, %s, %s, %s, NOW()) ON CONFLICT (sku) DO UPDATE SET
+            product_url=EXCLUDED.product_url, title=EXCLUDED.title,
+            source=EXCLUDED.source, checked_at=NOW()""",
+            (sku, hit.get('url') if hit else None,
+             hit.get('title') if hit else None, hit.get('source') if hit else None))
