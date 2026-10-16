@@ -188,3 +188,85 @@ def record(url,pid,product_url):
         if not prev or prev['price']!=price or prev['shipping_cost']!=0:
             cur.execute('INSERT INTO public.price_history(offer_id,price,shipping_cost,availability,recorded_at) VALUES(%s,%s,0,%s,%s)',(oid,price,av,now))
     return price
+
+
+def targeted_sku_search(sku, max_product_checks=6):
+    """Look for a specific manufacturer SKU in public Shopify search results.
+
+    This is deliberately conservative: a result must explicitly contain the
+    exact code in its variant SKU, product title, or handle. No DB writes.
+    """
+    from urllib.parse import urljoin
+    code = sku_key(sku)
+    if not re.fullmatch(r'(?:F|L|LB)?[A-Z0-9]{4,12}', code):
+        return None, ['Ungültige oder zu allgemeine Herstellerartikelnummer.']
+    diagnostics = []
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    handles = []
+    def add(handle):
+        handle = str(handle or '').strip().split('?')[0].strip('/')
+        if handle and handle not in handles:
+            handles.append(handle)
+    def get(url, **kwargs):
+        response = session.get(url, timeout=22, **kwargs)
+        if response.status_code == 429:
+            raise RuntimeError('HTTP 429: Suche gestoppt; später erneut versuchen.')
+        response.raise_for_status()
+        return response
+    try:
+        # Shopify predictive search is a targeted, small response.
+        response = get(BASE + '/de/search/suggest.json', params={
+            'q': str(sku).strip(), 'resources[type]': 'product',
+            'resources[limit]': 10})
+        products = (response.json().get('resources') or {}).get('results', {}).get('products', [])
+        for item in products:
+            link = str(item.get('url') or '')
+            if '/products/' in link:
+                add(urlparse(urljoin(BASE, link)).path.split('/products/', 1)[1])
+            else:
+                add(item.get('handle'))
+        diagnostics.append(f'Gezielte Shopify-Suche: {len(products)} Vorschläge')
+    except RuntimeError as exc:
+        return None, [str(exc)]
+    except Exception as exc:
+        diagnostics.append(f'Shopify-Suchvorschläge nicht verfügbar: {type(exc).__name__}')
+    try:
+        response = get(BASE + '/de/search', params={'q': str(sku).strip(), 'type': 'product'})
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for a in soup.select('a[href*="/products/"]'):
+            path = urlparse(urljoin(BASE, a.get('href', ''))).path
+            if '/products/' in path:
+                add(path.split('/products/', 1)[1])
+        diagnostics.append(f'Shop-Suchergebnisse: {len(handles)} eindeutige Produktlinks')
+    except RuntimeError as exc:
+        return None, diagnostics + [str(exc)]
+    except Exception as exc:
+        diagnostics.append(f'HTML-Suche nicht verfügbar: {type(exc).__name__}')
+    checked = 0
+    for handle in handles[:max_product_checks]:
+        try:
+            response = get(BASE + '/products/' + handle + '.js')
+            product = response.json()
+            checked += 1
+            title = str(product.get('title') or '')
+            actual_handle = str(product.get('handle') or handle)
+            candidates = []
+            for variant in product.get('variants') or []:
+                if variant.get('sku'):
+                    candidates.append(('Varianten-SKU', sku_key(variant['sku'])))
+            for raw in re.findall(r'(?<![A-Za-z0-9])(?:LB|L|F)\s*[-_]?\s*\d{3,7}(?![A-Za-z0-9])',
+                                  title + ' ' + actual_handle, flags=re.I):
+                candidates.append(('Titel/URL', sku_key(raw)))
+            match = next(((source, key) for source, key in candidates if key == code), None)
+            if match:
+                diagnostics.append(f'SKU {sku} bestätigt: {match[0]}')
+                return {'url': BASE + '/de/products/' + actual_handle,
+                        'title': title, 'sku': code, 'source': 'Gezielte Suche: ' + match[0]}, diagnostics
+        except RuntimeError as exc:
+            return None, diagnostics + [str(exc)]
+        except Exception as exc:
+            diagnostics.append(f'Produkt {handle}: {type(exc).__name__}')
+        time.sleep(1.5)
+    diagnostics.append(f'{checked} Produktdatensätze verifiziert; kein eindeutiger SKU-Treffer')
+    return None, diagnostics

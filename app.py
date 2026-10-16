@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.35 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.36 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -1017,10 +1017,40 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                                 if str(item.lumibricks_url).strip():
                                     st.info('Kein neuer Vorschlag, da der Artikel bereits einen Lumibricks-Link hat.')
                             else:
-                                st.warning('Keiner der Artikelnummern-Schlüssel ist im zuletzt geladenen Lumibricks-Katalog vorhanden.')
+                                st.warning('Keiner der Artikelnummern-Schlüssel ist im zuletzt geladenen Lumibricks-Katalog vorhanden. Bitte die gezielte Produktsuche darunter verwenden.')
                                 code=next((k for k in normalized_keys if k.isdigit()),'')
                                 nearby=[k for k in stored_catalog if code and code in k][:12]
                                 if nearby: st.write('Ähnliche Katalogschlüssel: '+', '.join(nearby))
+        with st.expander('🔍 Fehlende Lumibricks-SKU gezielt suchen', expanded=False):
+            st.caption('Sucht nach einer einzelnen Herstellerartikelnummer auf Lumibricks. Prüft Suchergebnisse anhand der Produktdaten; keine automatische Zuordnung.')
+            missing_sku=st.text_input('Herstellerartikelnummer (z. B. F9031)', value='F9031', key='lumi_target_sku').strip()
+            if st.button('Lumibricks gezielt durchsuchen', key='lumi_target_run'):
+                with st.spinner('Gezielte Lumibricks-Produktsuche…'):
+                    found, details=lumibricks_store.targeted_sku_search(missing_sku)
+                st.session_state['lumi_target_result']=(missing_sku,found,details)
+                if found:
+                    existing=st.session_state.get('lumi_catalog_diagnostic',{})
+                    existing[lumibricks_store.sku_key(missing_sku)]=found
+                    st.session_state['lumi_catalog_diagnostic']=existing
+                    # Offer only unassigned Odoo products with an exact normalized key.
+                    suggestions=list(st.session_state.get('lumi_suggestions',[]))
+                    for _,item in lumi_products.iterrows():
+                        if str(item.lumibricks_url).strip(): continue
+                        keys={lumibricks_store.sku_key(k) for k in brickmo_match_keys(item)}
+                        if lumibricks_store.sku_key(missing_sku) in keys:
+                            pid=str(item.db_id)
+                            if not any(str(s[0])==pid for s in suggestions):
+                                suggestions.append((pid,str(item.sku),found['url'],found['title'],lumibricks_store.sku_key(missing_sku)))
+                    st.session_state['lumi_suggestions']=suggestions
+            last=st.session_state.get('lumi_target_result')
+            if last:
+                searched,found,details=last
+                for line in details: st.caption(line)
+                if found:
+                    st.success(f"Bestätigter Treffer für {searched}: {found['title']}")
+                    st.markdown(f"[Produkt ansehen]({found['url']})")
+                else:
+                    st.warning('Kein verifizierter Treffer. Ein vorhandenes Produkt wird dadurch nicht ausgeschlossen.')
         suggestions=st.session_state.get('lumi_suggestions',[])
         if suggestions:
             st.caption('Abgleich über Odoo-SKU oder Hersteller-SKU aus der Beschreibung. Jeden Treffer einzeln bestätigen:')
