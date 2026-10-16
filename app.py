@@ -404,7 +404,7 @@ with st.expander('🧭 Brickmo-Kategoriesuche testen (Funwhole)', expanded=False
     st.caption('Gezielter Test einer Brickmo-Kategorieseite. Nur exakte SKU-Kandidaten werden auf der Produktseite überprüft und anschließend im Index gespeichert. Keine automatische Produktzuordnung.')
     category_sku=st.text_input('Herstellerartikelnummer für Kategoriesuche', value='FO9054', key='category_sku')
     category_url=st.text_input('Brickmo-Kategorie', value=brickmo_index.CATEGORY_START, key='category_url')
-    category_pages=st.selectbox('Maximal zu prüfende Kategorieseiten', [2,5,8,12],index=1,key='category_pages')
+    category_pages=st.selectbox('Maximal zu prüfende Kategorieseiten', [2,5,8,12,20],index=1,key='category_pages')
     if st.button('Kategoriesuche starten',key='category_search'):
         try:
             with st.spinner('Kategorieseiten und exakte SKU-Kandidaten werden geprüft…'):

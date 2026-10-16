@@ -226,38 +226,44 @@ def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8
         raise ValueError('Nur HTTPS-Kategorieseiten von brickmo.com erlaubt.')
     session = requests.Session()
     session.headers.update(CATEGORY_HEADERS)
-    queue = deque([category_url])
-    visited = set(); candidates = {}; notes = []; scanned_links = 0
-    while queue and len(visited) < max(1,min(int(max_pages),20)):
-        page = queue.popleft()
-        if page in visited: continue
-        visited.add(page)
+    # Deterministic pagination: do not follow anchors or arbitrary ?p=22 links.
+    # Each listing is visited once, and each canonical product URL is counted once.
+    from urllib.parse import urlunparse
+    base = urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/') + '/', '', '', ''))
+    pages_to_check = max(1, min(int(max_pages), 20))
+    candidates = {}; notes = []; unique_products = set()
+    scanned_links = 0; checked_pages = 0
+    for page_number in range(1, pages_to_check + 1):
+        page = base if page_number == 1 else f'{base}?p={page_number}'
+        checked_pages += 1
         try:
-            response = session.get(page,timeout=timeout)
-            notes.append(f'Kategorieseite {len(visited)}: HTTP {response.status_code} – {page}')
-            if not response.ok: continue
-            soup = BeautifulSoup(response.text,'html.parser')
-            page_links = 0
+            response = session.get(page, timeout=timeout)
+            notes.append(f'Kategorieseite {page_number}: HTTP {response.status_code} – {page}')
+            if not response.ok:
+                continue
+            soup = BeautifulSoup(response.text, 'html.parser')
+            new_links = 0
             for a in soup.select('a[href]'):
-                href = urljoin(page, a.get('href',''))
+                href = urljoin(page, a.get('href', ''))
                 pu = urlparse(href)
-                if pu.hostname not in ('www.brickmo.com','brickmo.com'): continue
-                if re.search(r'/\d{3,}/[^/]+/?$',pu.path):
-                    page_links += 1
-                    if exact_sku_in_url(href,target):
-                        clean = canonical(href)
-                        candidates[clean] = href
-                # Follow category pagination only, not arbitrary site links.
-                if ('page=' in pu.query or 'p=' in pu.query) and pu.path.rstrip('/') == parsed.path.rstrip('/'):
-                    if href not in visited and href not in queue and len(queue) < 20:
-                        queue.append(href)
-            scanned_links += page_links
-            notes.append(f'  {page_links} Produktlinks, {len(candidates)} exakte SKU-URL-Kandidaten')
-            # Shopware pagination often uses ?p=N without an explicit next link.
-            if not queue and page_links and len(visited) < max_pages:
-                n = len(visited)+1
-                next_page = category_url + ('&' if '?' in category_url else '?') + urlencode({'p':n})
-                if next_page not in visited: queue.append(next_page)
+                if pu.hostname not in ('www.brickmo.com', 'brickmo.com'):
+                    continue
+                if not re.search(r'/\d{3,}/[^/]+/?$', pu.path):
+                    continue
+                clean = canonical(href)
+                if clean in unique_products:
+                    continue
+                unique_products.add(clean)
+                new_links += 1
+                if exact_sku_in_url(href, target):
+                    candidates[clean] = href
+            scanned_links += new_links
+            notes.append(f'  {new_links} neue eindeutige Produktlinks; '
+                         f'{len(unique_products)} insgesamt; {len(candidates)} exakte SKU-Kandidaten')
+            # A category may end before the requested page count; stop on an empty listing.
+            if not new_links:
+                notes.append('  Keine weiteren neuen Produkte – Suche beendet.')
+                break
         except requests.RequestException as exc:
             notes.append(f'Kategorie: {type(exc).__name__}: {str(exc)[:130]}')
     verified = []
@@ -285,4 +291,4 @@ def crawl_category_for_sku(db_url, sku, category_url=CATEGORY_START, max_pages=8
                     manufacturer_sku=excluded.manufacturer_sku,product_title=excluded.product_title,
                     source_sitemap=excluded.source_sitemap,indexed_at=now()''',
                     [(v['url'],target,v['title'],'Brickmo-Kategoriesuche') for v in verified])
-    return {'matches':verified,'notes':notes,'pages':len(visited),'links':scanned_links,'candidates':len(candidates)}
+    return {'matches':verified,'notes':notes,'pages':checked_pages,'links':scanned_links,'candidates':len(candidates)}
