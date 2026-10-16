@@ -10,10 +10,11 @@ import db_store
 import quickmatch
 import brickmo_index
 import lootstore_index
+import lumibricks_store
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='lbrixx_logo.png')
 DATA_FILE = 'lbrixx_products.csv'
-COLUMNS = ['db_id','ean','odoo_id','brand_id','brand_name','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error']
+COLUMNS = ['db_id','ean','odoo_id','brand_id','brand_name','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error','lumibricks_url','lumibricks_price','lumibricks_shipping','lumibricks_total','lumibricks_availability','lumibricks_checked','lumibricks_error']
 SEEDS = [
  {'sku':'FO9060','lbrixx_sku':'17003','description':'FunWhole Cyberpunk Future Bus','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'},
  {'sku':'FO9043','lbrixx_sku':'','description':'FunWhole Cyberpunk Polizeiauto','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82178/funwhole-cyberpunk-fo9043-polizeiauto-fo9043'},
@@ -29,7 +30,7 @@ if not DB_URL:
     st.stop()
 
 def load():
-    return db_store.load(DB_URL),None
+    return lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)),None
 
 def normalize(df):
     for c in COLUMNS:
@@ -38,7 +39,7 @@ def normalize(df):
 
 def save(df):
     stored=db_store.save(DB_URL,normalize(df))
-    st.session_state.products=normalize(stored)
+    st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,stored))
 
 def save_changed_rows(df, indices):
     """Persist only modified product rows, never rewrite the entire catalog."""
@@ -46,7 +47,7 @@ def save_changed_rows(df, indices):
     if not unique:
         return
     db_store.save(DB_URL, normalize(df.loc[unique].copy()))
-    st.session_state.products=normalize(db_store.load(DB_URL))
+    st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
 
 def set_product_flag(row, field, enabled):
     product_id=str(row.get('db_id','')).strip()
@@ -241,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.24 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.31 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -408,7 +409,7 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
                     changed.append(idx)
             if changed:
                 db_store.save_odoo_rows(DB_URL,merged.loc[changed].copy())
-                st.session_state.products=normalize(db_store.load(DB_URL))
+                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
             st.success(f'Odoo-Synchronisierung: {added} neu, {updated} geprüft, {len(changed)} tatsächlich geändert, {skipped} übersprungen. Wettbewerberlinks und Preisverläufe unverändert.')
             st.rerun()
         except Exception as exc:
@@ -1020,6 +1021,7 @@ else:
         'LBrixx-Preis': 'lbrixx_price',
         'Brickmo-Preis': 'brickmo_price',
         'Lootstore-Preis': 'lootstore_price',
+        'Lumibricks-Preis': 'lumibricks_total',
         'Lootstore-Gesamtpreis': 'lootstore_total',
         'Preisdifferenz (LBrixx − Lootstore)': 'loot_difference',
         'Versand': 'shipping',
@@ -1068,6 +1070,13 @@ else:
             url=str(row.brickmo_url).strip()
             timestamp=row.last_checked
             valid=valid_url(url)
+        elif provider=='lumibricks':
+            status=str(row.lumibricks_availability).strip().lower()
+            price=fmt(row.lumibricks_total)
+            shipping=fmt(row.lumibricks_shipping)
+            url=str(row.lumibricks_url).strip()
+            timestamp=row.lumibricks_checked
+            valid=lumibricks_store.valid_url(url)
         else:
             status=str(row.lootstore_availability).strip().lower()
             price=fmt(row.lootstore_total)
@@ -1083,7 +1092,7 @@ else:
                     '<span class="missing-mark" aria-label="Keine Produktzuordnung">❗</span>'
                     '<div class="missing-label">Nicht zugeordnet</div></td>')
         if valid: label=f'<a href="{cell(url)}" target="_blank" rel="noopener noreferrer">{label} ↗</a>'
-        err=str(row.error if provider=='brickmo' else row.lootstore_error).strip()
+        err=str(row.error if provider=='brickmo' else row.lumibricks_error if provider=='lumibricks' else row.lootstore_error).strip()
         stamp=cell(short_date(timestamp))
         label=('❗ ' if err else '✓ ' if timestamp else '● ')+label
         shipping_label = f'<div class="shipping-note">inkl. {cell(shipping)} Versand</div>' if shipping != '–' else ''
@@ -1107,6 +1116,7 @@ else:
             f'<td>{cell(fmt(r.lbrixx_price))}</td>' +
             price_cell(r,'brickmo') +
             price_cell(r,'lootstore') +
+            price_cell(r,'lumibricks') +
             '</tr>')
     table_css = """
     <style>
@@ -1142,8 +1152,8 @@ else:
     .lbrixx-table th a:hover {text-decoration:underline!important;}
     </style>
     """
-    headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis inkl. Versand ↗','Lootstore-Preis inkl. Versand ↗']
-    sort_fields=['','', 'sku','brand_name','ean','lbrixx_sku','description','lbrixx_price','total','lootstore_total']
+    headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis inkl. Versand ↗','Lootstore-Preis inkl. Versand ↗','Lumibricks-Preis inkl. Versand ↗']
+    sort_fields=['','', 'sku','brand_name','ean','lbrixx_sku','description','lbrixx_price','total','lootstore_total','lumibricks_total']
     def heading(h,k):
         if not k: return f'<th>{cell(h)}</th>'
         next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
@@ -1153,6 +1163,57 @@ else:
     table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
     st.html(table_html)
     st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel in UTC.')
+    with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expanded=False):
+        st.caption('Nur Lumibricks/FunWhole. Zuordnung über Hersteller-SKU ohne #DE/#US; Bestätigung erforderlich. Preis nur bei eindeutigem EUR-Nachweis.')
+        lumi_products=df.loc[df['brand_name'].astype(str).str.contains(r'lumibricks|funwhole',case=False,na=False) & ~deleted_mask].copy()
+        labels={f"{r.sku} · {str(r.description)[:65]}":i for i,r in lumi_products.iterrows()}
+        if not labels:
+            st.info('Keine Lumibricks-/FunWhole-Artikel im Odoo-Sortiment gefunden.')
+        else:
+            chosen_lumi=st.selectbox('LBrixx-Artikel',list(labels),key='lumi_article')
+            lumi_idx=labels[chosen_lumi]
+            lumi_row=df.loc[lumi_idx]
+            lumi_url=st.text_input('Lumibricks-Produktlink',value=str(lumi_row.lumibricks_url),key=f'lumi_url_{lumi_idx}')
+            if st.button('🔗 Lumibricks-Link bestätigen'):
+                try:
+                    lumibricks_store.confirm(DB_URL,lumi_row.db_id,lumi_url)
+                    st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                    st.success('Link gespeichert.');st.rerun()
+                except Exception as exc: st.error(str(exc))
+            if st.button('💶 EUR-Preis des gewählten Artikels prüfen'):
+                try:
+                    with st.spinner('Lumibricks-EUR-Preis prüfen…'):
+                        price=lumibricks_store.record(DB_URL,lumi_row.db_id,str(lumi_row.lumibricks_url))
+                    st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                    st.success(f'EUR-Preis gespeichert: {fmt(price)} · Versand 0,00 €');st.rerun()
+                except Exception as exc: st.error(f'Preis nicht übernommen: {exc}')
+            if st.button('🔎 Lumibricks-SKU-Vorschläge suchen'):
+                with st.spinner('Öffentlichen Lumibricks-Katalog lesen…'):
+                    catalog,diagnostics,count=lumibricks_store.catalog()
+                suggestions=[]
+                for _,product in lumi_products.iterrows():
+                    if str(product.lumibricks_url).strip(): continue
+                    key=lumibricks_store.sku_key(product.sku)
+                    hit=catalog.get(key)
+                    if hit: suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+                st.session_state['lumi_suggestions']=suggestions
+                st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
+                for message in diagnostics: st.warning(message)
+            suggestions=st.session_state.get('lumi_suggestions',[])
+            if suggestions:
+                st.caption('Vorschläge einzeln bestätigen:')
+                for pid,sku,url,title in suggestions[:100]:
+                    a,b=st.columns([5,1])
+                    with a: st.markdown(f'**{sku}** · {title[:75]} · [Produkt]({url})')
+                    with b:
+                        if st.button('Bestätigen',key=f'lumi_confirm_{pid}'):
+                            try:
+                                lumibricks_store.confirm(DB_URL,pid,url)
+                                st.session_state['lumi_suggestions']=[s for s in suggestions if s[0]!=pid]
+                                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                                st.rerun()
+                            except Exception as exc: st.error(str(exc))
+    st.caption('Lumibricks-Preise werden nur bei eindeutigem EUR-Nachweis gespeichert. Bei abweichender Währung bleibt der letzte bestätigte Preis erhalten.')
     st.markdown('#### Preise aktualisieren')
     st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Zwischen Shop-Anfragen liegen mindestens 2 Sekunden. HTTP 429 stoppt die jeweilige Serie. Zeitangaben sind UTC.')
     a,b,c=st.columns([1,1,1])
