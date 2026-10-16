@@ -423,3 +423,80 @@ def batch_match_skus(db_url, skus):
     for row in rows:
         results.setdefault(row['manufacturer_sku'], []).append(dict(row))
     return results
+
+
+def enrich_category_skus(db_url, category_url, limit=25, timeout=15):
+    """Bounded opt-in detail enrichment for links lacking SKU in a category.
+
+    Does not update LBrixx offers; records a SKU only if the product page explicitly
+    identifies one. Never guesses from generic text or other products.
+    """
+    import time
+    from bs4 import BeautifulSoup
+    category_path = urlparse(category_url).path.rstrip('/') + '/'
+    cap = max(1, min(int(limit), 50))
+    session = requests.Session()
+    session.headers.update(CATEGORY_HEADERS)
+    # Retrieve category pages to collect links not yet in catalog. Limit network requests.
+    first = session.get(category_url, timeout=timeout)
+    first.raise_for_status()
+    first_soup = BeautifulSoup(first.text, 'html.parser')
+    total = min(_last_category_page(first_soup, category_path, safety_cap=60), 60)
+    urls = []
+    seen = set()
+    for page in range(1, total + 1):
+        if page == 1:
+            soup = first_soup
+        else:
+            r = session.get(category_url.rstrip('/') + '/?p=' + str(page), timeout=timeout)
+            if not r.ok:
+                continue
+            soup = BeautifulSoup(r.text, 'html.parser')
+        for a in soup.select('a[href]'):
+            u = urljoin(category_url, a.get('href', ''))
+            if urlparse(u).hostname not in ('brickmo.com', 'www.brickmo.com'):
+                continue
+            if not re.search(r'/\d{3,}/[^/]+/?$', urlparse(u).path):
+                continue
+            u = canonical(u)
+            if u not in seen and not _category_sku_from_url(u):
+                seen.add(u)
+                urls.append(u)
+        if len(urls) >= cap:
+            break
+    notes, records, checked = [], [], 0
+    for u in urls[:cap]:
+        try:
+            r = session.get(u, timeout=timeout)
+            checked += 1
+            if not r.ok:
+                notes.append(f'{u}: HTTP {r.status_code}')
+                continue
+            soup = BeautifulSoup(r.text, 'html.parser')
+            # SKU must be labelled in the main product detail section.
+            main = soup.select_one('.product--details') or soup.select_one('.product--detail') or soup.select_one('main') or soup
+            content = main.get_text(' ', strip=True)
+            found = re.search(r'(?:Produkt-Nr\.|Artikel-Nr\.|Artikelnummer|Produktnummer)\s*:?\s*(FO?\d{4,})\b', content, re.I)
+            if not found:
+                notes.append(f'{u}: keine eindeutig beschriftete FO-Artikelnummer')
+                continue
+            sku = normalized_sku(found.group(1))
+            title = soup.select_one('h1')
+            title = title.get_text(' ', strip=True) if title else u.rsplit('/', 1)[-1].replace('-', ' ')
+            records.append((u, sku, title, 'Brickmo-Produktdetails (SKU bestätigt)'))
+        except requests.RequestException as exc:
+            notes.append(f'{u}: {type(exc).__name__}: {str(exc)[:90]}')
+        time.sleep(0.6)
+    if records:
+        with psycopg.connect(db_url, connect_timeout=12) as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA)
+                cur.executemany("""INSERT INTO public.brickmo_catalog
+                    (product_url,manufacturer_sku,product_title,source_sitemap,indexed_at)
+                    VALUES (%s,%s,%s,%s,now())
+                    ON CONFLICT(product_url) DO UPDATE SET
+                    manufacturer_sku=excluded.manufacturer_sku,
+                    product_title=excluded.product_title,
+                    source_sitemap=excluded.source_sitemap,
+                    indexed_at=now()""", records)
+    return {'checked': checked, 'found': len(records), 'saved': len(records), 'notes': notes[:40]}

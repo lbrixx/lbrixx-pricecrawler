@@ -456,7 +456,8 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expan
                 for _, product in products_to_match.iterrows():
                     key = brickmo_index.normalized_sku(product['sku'])
                     for match in indexed.get(key, []):
-                        comparison.append({'SKU':str(product['sku']), 'LBrixx-Artikel':str(product['description']),
+                        comparison.append({'db_id':str(product['db_id']), 'SKU':str(product['sku']),
+                            'LBrixx-Artikel':str(product['description']),
                             'Brickmo-Produkt':match['product_title'], 'Brickmo-Link':match['product_url'],
                             'Quelle':match['source_sitemap']})
                 st.session_state.full_category_comparison = comparison
@@ -464,10 +465,43 @@ with st.expander('📦 Brickmo-Kategorie vollständig indexieren (V28.7)', expan
                 st.error(f'Abgleich fehlgeschlagen: {exc}')
         comparison = st.session_state.get('full_category_comparison')
         if comparison is not None:
-            st.write(f'{len(comparison)} mögliche Zuordnungsvorschläge (ohne automatische Speicherung).')
-            if comparison:
-                st.dataframe(pd.DataFrame(comparison), use_container_width=True, hide_index=True)
-            st.caption('Zur endgültigen Zuordnung bitte die Schnellzuordnung verwenden und jeden Vorschlag bestätigen.')
+            st.write(f'{len(comparison)} mögliche Zuordnungsvorschläge – nur nach Einzelbestätigung gespeichert.')
+            for i, candidate in enumerate(comparison):
+                with st.container(border=True):
+                    st.markdown(f"**{html.escape(candidate['SKU'])} – {html.escape(candidate['LBrixx-Artikel'])}**")
+                    st.caption(f"Brickmo: {candidate['Brickmo-Produkt']} · Quelle: {candidate['Quelle']}")
+                    st.markdown(f"[Brickmo-Produkt prüfen]({candidate['Brickmo-Link']})")
+                    if st.button('✓ Zuordnung bestätigen', key=f'category_confirm_{candidate["db_id"]}_{i}'):
+                        try:
+                            clean = db_store.confirm_match(DB_URL, candidate['db_id'], 'Brickmo', candidate['Brickmo-Link'])
+                            current = st.session_state.products
+                            mask = current['db_id'].astype(str) == candidate['db_id']
+                            current.loc[mask, 'brickmo_url'] = clean
+                            st.session_state.products = current
+                            st.session_state.full_category_comparison = [c for c in comparison if c['db_id'] != candidate['db_id']]
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f'Zuordnung fehlgeschlagen: {exc}')
+            if not comparison:
+                st.info('Keine offenen Vorschläge mehr vorhanden.')
+    st.divider()
+    st.markdown('**Optionale SKU-Ergänzung aus Produktdetails**')
+    st.caption('Liest nur eine begrenzte Anzahl bereits indexierter Produktseiten ohne SKU nach. '
+               'Bereits zugeordnete LBrixx-Artikel werden nicht verändert. Bitte nur gelegentlich starten.')
+    detail_limit = st.selectbox('Maximale Produktseiten je Durchlauf', [10, 25, 50], key='detail_enrich_limit')
+    if st.button('Fehlende Artikelnummern nachladen', key='category_enrich_run'):
+        try:
+            with st.spinner('Brickmo-Produktdetails werden vorsichtig geprüft…'):
+                st.session_state.category_enrich_report = brickmo_index.enrich_category_skus(DB_URL, full_category_url, limit=detail_limit)
+        except Exception as exc:
+            st.error(f'Detailprüfung fehlgeschlagen: {exc}')
+    enrich_report = st.session_state.get('category_enrich_report')
+    if enrich_report:
+        st.write(f"{enrich_report['checked']} Produktseiten geprüft · {enrich_report['found']} Artikelnummern erkannt · "
+                 f"{enrich_report['saved']} im Index gespeichert")
+        with st.expander('Detailprüfung – Diagnose'):
+            for note in enrich_report['notes']:
+                st.caption(note)
 
 with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
     st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
