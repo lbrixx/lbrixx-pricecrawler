@@ -363,10 +363,11 @@ with st.expander('➕ Lootstore-Artikel hinzufügen'):
 
 with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
     st.caption('Liest öffentliche Brickmo-Sitemaps ein und speichert erkannte Artikelnummern mit Produktlinks in Supabase. Die Indexabdeckung hängt von den tatsächlich bereitgestellten Sitemaps ab.')
-    if st.button('Brickmo-Katalog aktualisieren', key='brickmo_index_refresh'):
+    sitemap_sku=st.text_input('Artikelnummer in sämtlichen Sitemap-URLs prüfen', value='FO9054', key='sitemap_sku')
+    if st.button('Brickmo-Katalog aktualisieren und SKU prüfen', key='brickmo_index_refresh'):
         try:
             with st.spinner('Brickmo-Sitemaps werden eingelesen (kann einige Minuten dauern)…'):
-                report=brickmo_index.refresh(DB_URL)
+                report=brickmo_index.refresh(DB_URL, target_sku=sitemap_sku)
             st.session_state.brickmo_index_report=report
             if report['saved']:
                 st.success(f"{report['saved']} Produktlinks gespeichert oder aktualisiert; {report['sitemaps']} Sitemaps verarbeitet.")
@@ -377,7 +378,18 @@ with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
     report=st.session_state.get('brickmo_index_report')
     if report:
         if report['truncated']: st.info('Nur ein Teil der Sitemaps verarbeitet. Ein erneuter Lauf kann weitere Seiten erfassen.')
-        with st.expander('Katalog-Diagnose'):
+        with st.expander('Katalog-Diagnose', expanded=True):
+            target=report.get('target_sku', 'FO9054')
+            matches=report.get('exact_matches', [])
+            scanned=report.get('scanned_urls', 0)
+            st.markdown(f'**SKU-Prüfung: {target} – {len(matches)} exakte URL-Treffer in {scanned} geprüften URLs**')
+            if matches:
+                st.success(f'{target} wurde in der Sitemap gefunden.')
+                for u in matches: st.code(u, language=None)
+            elif report.get('complete', False):
+                st.warning(f'{target} ist in den {scanned} geprüften Sitemap-URLs nicht enthalten. Eine andere Katalogquelle ist erforderlich.')
+            else:
+                st.warning(f'Kein Treffer für {target} in den bisher geprüften {scanned} URLs. Nicht alle Sitemaps wurden verarbeitet.')
             for note in report['notes']: st.caption(note)
             sample_urls=report.get('sample_urls', [])
             st.markdown('**20 Beispiel-URLs aus den abgerufenen Sitemaps**')

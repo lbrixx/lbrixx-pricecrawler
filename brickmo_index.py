@@ -7,7 +7,7 @@ import gzip
 import re
 from collections import deque
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urljoin, parse_qs
+from urllib.parse import urlparse, urljoin, parse_qs, unquote
 import xml.etree.ElementTree as ET
 import requests
 import psycopg
@@ -87,7 +87,23 @@ def extract_xml(response):
     return name, locs
 
 
-def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
+def exact_sku_in_url(url, sku):
+    """Match a whole SKU token in a URL, not FO90540 when searching FO9054."""
+    key = normalized_sku(sku)
+    if not key:
+        return False
+    path = unquote(urlparse(url).path).upper()
+    query = parse_qs(urlparse(url).query)
+    candidates = [path] + [v.upper() for values in query.values() for v in values]
+    forms = {key}
+    m = re.fullmatch(r'FO(\d{4,})', key)
+    if m:
+        forms.add('F' + m.group(1))
+    return any(re.search(r'(?<![A-Z0-9])' + re.escape(form) + r'(?![A-Z0-9])', text)
+               for form in forms for text in candidates)
+
+
+def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12, target_sku='FO9054'):
     session = requests.Session()
     session.headers.update(UA)
     queue, notes = discover(session, timeout)
@@ -97,6 +113,9 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
     processed = 0
     samples = []
     sample_seen = set()
+    target_sku = normalized_sku(target_sku)
+    exact_matches = []
+    url_count = 0
     while queue and processed < max_sitemaps and len(records) < max_products:
         url = queue.popleft()
         if url in seen or urlparse(url).hostname not in ('www.brickmo.com', 'brickmo.com'):
@@ -115,6 +134,10 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
                         queue.append(loc)
                 notes.append(f'Sitemap-Index: {len(locs)} Unter-Sitemaps')
             else:
+                url_count += len(locs)
+                for loc in locs:
+                    if exact_sku_in_url(loc, target_sku) and len(exact_matches) < 25:
+                        exact_matches.append(loc)
                 # Diagnostic: preserve representative real sitemap URLs even if SKU parsing fails.
                 for loc in locs:
                     if len(samples) >= 20: break
@@ -144,7 +167,7 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
                     manufacturer_sku=excluded.manufacturer_sku,product_title=excluded.product_title,
                     source_sitemap=excluded.source_sitemap,indexed_at=now()''', list(records.values()))
             saved = len(records)
-    return {'saved':saved, 'sitemaps':processed, 'pending_sitemaps':len(queue), 'notes':notes[-18:], 'truncated':bool(queue), 'sample_urls':samples}
+    return {'saved':saved, 'sitemaps':processed, 'pending_sitemaps':len(queue), 'notes':notes[-18:], 'truncated':bool(queue), 'sample_urls':samples, 'target_sku':target_sku, 'exact_matches':exact_matches, 'scanned_urls':url_count, 'complete':not bool(queue)}
 
 
 def lookup(db_url, sku, limit=5):
