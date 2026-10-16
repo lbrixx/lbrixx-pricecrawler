@@ -1001,6 +1001,9 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                 # the SKU itself (e.g. "L9113 (18007)"), or lbrixx_sku.
                 # Inspect all explicit reference fields, not only description.
                 primary=str(product.get('sku', '') or '').strip()
+                # `description` is the full Odoo product name imported from
+                # product.product.name. It may begin with a numeric manufacturer
+                # SKU: `17007 (L9118) Cyber Couture Galleria`.
                 reference_fields=[str(product.get(field, '') or '') for field in
                                   ('sku', 'description', 'lbrixx_sku')]
                 candidates=[]; seen_keys=set()
@@ -1018,11 +1021,21 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                     # Explicitly labelled manufacturer numbers.
                     for raw in re.findall(r'(?i)\b(?:sku|artikelnummer|artikelnr\.?|ref(?:erenz)?\.?)\s*[:#-]?\s*([A-Za-z]{0,6}\d{3,8})\b',field_text):
                         add_candidate(raw)
+                # The manufacturer SKU can be the FIRST token of the Odoo
+                # product name, including numeric codes. Require a separator
+                # and an additional name token, to avoid extracting piece counts.
+                full_name=str(product.get('description','') or '').strip()
+                leading=re.match(r'^([A-Za-z]{0,6}[- ]?\d{3,8})(?=\s*\(|\s+|\s*[-–—:])',full_name)
+                if leading:
+                    add_candidate(leading.group(1).replace(' ','').replace('-',''))
                 # lbrixx_sku is a dedicated SKU field and may be numeric.
                 add_candidate(product.get('lbrixx_sku',''))
                 # A SKU field containing "L9113 (18007)" also yields both.
                 # Keep a diagnostic record of all candidate keys.
-                sku_diagnostic_candidates.append(f"{primary}: Suchschlüssel {', '.join(candidates) or '(keine)'}")
+                sku_diagnostic_candidates.append(
+                    f"{primary}: Odoo-Produktname im Crawler: {str(product.get('description','') or '')[:160]!r} "
+                    f"| Suchschlüssel {', '.join(candidates) or '(keine)'}"
+                )
                 if candidates:
                     missing.append((product,candidates))
             # A single click checks all unlinked products. Keep progress and results
