@@ -981,9 +981,19 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             suggestions=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip(): continue
-                key=lumibricks_store.sku_key(product.sku)
-                hit=catalog.get(key)
-                if hit: suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+                # Search both the Odoo SKU and explicit manufacturer codes from
+                # the product description; never alter the original Odoo SKU.
+                keys = list(dict.fromkeys(
+                    lumibricks_store.sku_key(candidate)
+                    for candidate in brickmo_match_keys(product)
+                ))
+                matches = [catalog[key] for key in keys if key and key in catalog]
+                # Do not suggest ambiguous mappings when two different products
+                # match different aliases of the same Odoo article.
+                unique_urls = {match['url'] for match in matches}
+                if len(unique_urls) == 1:
+                    hit = matches[0]
+                    suggestions.append((str(product.db_id), str(product.sku), hit['url'], hit['title']))
             st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)
