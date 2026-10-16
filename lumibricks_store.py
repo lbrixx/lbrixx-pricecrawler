@@ -76,32 +76,65 @@ def confirm(url,pid,product_url):
           DO UPDATE SET product_url=excluded.product_url,is_active=true,match_status='confirmed'""",(int(pid),mid,clean))
     return clean
 
-def catalog(limit_pages=4):
-    """Public Shopify catalog; returns SKU-indexed candidates, no DB writes."""
-    result={}; seen=set(); diagnostics=[]
-    session=requests.Session();session.headers.update(HEADERS)
-    for page in range(1,limit_pages+1):
+def catalog(limit_pages=20):
+    """Search Shopify catalog by variant SKU and explicit F/L/LB product codes.
+
+    Read pages gently, stop on rate limiting or repeated product batches.
+    No database writes and no automatic assignment.
+    """
+    result = {}
+    seen = set()
+    diagnostics = []
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    pages = 0
+    for page in range(1, limit_pages + 1):
         try:
-            r=session.get(BASE+'/products.json',params={'limit':100,'page':page},timeout=25)
-            if r.status_code==429:
-                diagnostics.append('HTTP 429: Suche beendet');break
+            r = session.get(BASE + '/products.json',
+                            params={'limit': 100, 'page': page}, timeout=25)
+            if r.status_code == 429:
+                diagnostics.append('HTTP 429: Suche beendet; bitte später erneut versuchen')
+                break
             r.raise_for_status()
-            products=r.json().get('products',[])
-        except Exception as e:
-            diagnostics.append(f'Seite {page}: {e}');break
-        if not products: break
+            products = r.json().get('products', [])
+        except Exception as exc:
+            diagnostics.append(f'Seite {page}: {exc}')
+            break
+        if not products:
+            break
+        pages += 1
+        newly_seen = 0
         for product in products:
-            handle=product.get('handle','')
-            if not handle or handle in seen: continue
+            handle = str(product.get('handle') or '')
+            if not handle or handle in seen:
+                continue
             seen.add(handle)
-            variants=product.get('variants') or []
-            for v in variants:
-                key=sku_key(v.get('sku'))
-                if not key: continue
-                entry={'url':BASE+'/de/products/'+handle,'title':product.get('title',''),'sku':v.get('sku','')}
-                result.setdefault(key,entry)
-        if page<limit_pages: time.sleep(2)
-    return result,diagnostics,len(seen)
+            newly_seen += 1
+            title = str(product.get('title') or '')
+            url = BASE + '/de/products/' + handle
+            # Prefer Shopify variant SKUs; use title/handle only for an
+            # unambiguous manufacturer-style code (not generic numbers).
+            keys = []
+            for variant in product.get('variants') or []:
+                raw = variant.get('sku')
+                if raw:
+                    keys.append((sku_key(raw), 'Varianten-SKU'))
+            for raw in re.findall(r'(?<![A-Za-z0-9])(?:LB|L|F)\s*[-_]?\s*\d{3,7}(?![A-Za-z0-9])',
+                                  title + ' ' + handle, flags=re.I):
+                keys.append((sku_key(raw), 'Titel/URL'))
+            for key, origin in keys:
+                if key:
+                    result.setdefault(key, {'url': url, 'title': title,
+                                            'sku': key, 'source': origin})
+        if not newly_seen:
+            diagnostics.append('Wiederholte Katalogseite erkannt; Suche beendet')
+            break
+        if page < limit_pages:
+            time.sleep(2)
+    diagnostics.append(f'{pages} Katalogseiten · {len(seen)} Produkte · {len(result)} SKU-Schlüssel')
+    if pages == limit_pages and products:
+        diagnostics.append('Seitenlimit erreicht; Katalog möglicherweise nicht vollständig')
+    return result, diagnostics, len(seen)
 
 def parse_eur(url):
     """Only accept explicit EUR price in structured data. Never interpret USD as EUR."""

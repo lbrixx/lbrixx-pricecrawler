@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.33 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.34 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -989,7 +989,7 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             for message in diagnostics: st.warning(message)
         suggestions=st.session_state.get('lumi_suggestions',[])
         if suggestions:
-            st.caption('Direkter SKU-Abgleich: LBrixx-Artikel → passender Lumibricks-Artikel. Jeden Treffer direkt bestätigen:')
+            st.caption('Abgleich über Odoo-SKU oder Hersteller-SKU aus der Beschreibung. Jeden Treffer einzeln bestätigen:')
             for pid,sku,url,title,matched_sku in suggestions[:100]:
                 a,b=st.columns([5,1])
                 with a: st.markdown(f'**LBrixx {sku}** → **Lumibricks {matched_sku}** · {title[:75]} · [Produkt ansehen]({url})')
