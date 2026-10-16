@@ -149,48 +149,91 @@ def _selected_variant_eur(product):
     return price, 'unavailable' if chosen.get('available') is False else 'unknown'
 
 
-def parse_eur(url):
-    """Read a German market EUR price, validating actual currency before any DB write.
+def _shopify_currency(session):
+    """Read the server-confirmed presentment currency, never infer from cookies."""
+    response=session.get(BASE+'/de/cart.js',timeout=25,
+                         headers={'Accept':'application/json','Cache-Control':'no-cache'})
+    if response.status_code==429:
+        raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    if not response.ok:
+        return f'HTTP {response.status_code}'
+    try:
+        return str(response.json().get('currency') or '').upper() or 'UNBEKANNT'
+    except (TypeError,ValueError,AttributeError):
+        return 'UNBEKANNT'
 
-    Shopify's locale-aware /de/products/<handle>.js returns prices in the
-    *presentment currency* of the current session. /de/cart.js explicitly
-    identifies that currency. A /de/ URL by itself does NOT guarantee EUR.
+
+def _currency_session(approach,clean):
+    """Try ordinary storefront currency selectors; success must be verified."""
+    session=requests.Session()
+    session.headers.update(HEADERS)
+    referer={'Referer':clean,'Origin':BASE}
+    if approach=='localization':
+        response=session.get(BASE+'/de',timeout=20)
+        if response.status_code==429:
+            raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+        response=session.post(BASE+'/localization',data={
+            'form_type':'localization', '_method':'put',
+            'country_code':'DE', 'language_code':'de',
+            'currency_code':'EUR', 'return_to':urlparse(clean).path,
+        },headers=referer,timeout=20)
+    elif approach=='currency_query':
+        response=session.get(clean,params={'currency':'EUR'},timeout=25)
+    elif approach=='currency_form':
+        response=session.get(BASE+'/de',timeout=20)
+        if response.status_code==429:
+            raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+        response=session.post(BASE+'/cart/update.js',data={'currency':'EUR'},
+                              headers=referer,timeout=20)
+    elif approach=='currency_cookie':
+        # A cookie alone is not evidence of EUR. The cart endpoint must still
+        # independently identify EUR before any price may be accepted.
+        session.cookies.set('cart_currency','EUR',domain='www.lumibricks.com',path='/')
+        response=session.get(clean,timeout=25)
+    else:
+        raise ValueError('Unbekannte Währungsstrategie')
+    if response.status_code==429:
+        raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    return session, response.status_code
+
+
+def parse_eur(url):
+    """Fetch verified German EUR pricing without ever relabeling USD.
+
+    A German URL and a displayed frontend currency selector are insufficient
+    evidence that Shopify's server-side product endpoint is returning EUR.
+    Each currency-switch method is validated against Shopify cart.js.
     """
     clean=canonical(url)
     slug=urlparse(clean).path.rstrip('/').split('/')[-1]
+    diagnostics=[]
+    for approach in ('localization','currency_query','currency_form','currency_cookie'):
+        try:
+            session,status=_currency_session(approach,clean)
+            currency=_shopify_currency(session)
+            diagnostics.append(f'{approach}: HTTP {status}, Warenkorb {currency}')
+            if currency!='EUR':
+                continue
+            details=session.get(BASE+'/de/products/'+quote(slug,safe='')+'.js',timeout=25,
+                                headers={'Accept':'application/json','Cache-Control':'no-cache'})
+            if details.status_code==429:
+                raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+            details.raise_for_status()
+            try: product=details.json()
+            except (ValueError,TypeError):
+                raise ValueError('Shopify-Produktdaten sind kein gültiges JSON')
+            return _selected_variant_eur(product)
+        except requests.RequestException as exc:
+            diagnostics.append(f'{approach}: Netzwerkfehler ({type(exc).__name__})')
+        except RuntimeError:
+            raise
+
+    # A genuinely EUR-denominated structured offer is a safe fallback.
     session=requests.Session()
     session.headers.update(HEADERS)
-    # Establish cookies and select DE as the shipping market; redirects and
-    # market negotiation are shop-controlled, so never assume success.
-    try:
-        landing=session.get(BASE+'/de',timeout=20)
-        if landing.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
-        session.post(BASE+'/localization',data={
-            'form_type':'localization','_method':'put',
-            'country_code':'DE','language_code':'de','return_to':urlparse(clean).path,
-        },headers={'Referer':clean,'Origin':BASE},timeout=20)
-    except requests.RequestException:
-        pass
-    cart=session.get(BASE+'/de/cart.js',timeout=25)
-    if cart.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
-    if cart.ok:
-        try: currency=str(cart.json().get('currency') or '').upper()
-        except (ValueError,TypeError,AttributeError): currency=''
-    else:
-        currency=''
-    if currency=='EUR':
-        details=session.get(BASE+'/de/products/'+quote(slug,safe='')+'.js',timeout=25)
-        if details.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
-        details.raise_for_status()
-        try: product=details.json()
-        except (ValueError,TypeError): raise ValueError('Shopify-Produktdaten sind kein gültiges JSON')
-        return _selected_variant_eur(product)
-
-    # The shop can sometimes publish a genuinely EUR-denominated structured
-    # offer even if Shopify's cart reports another market. Use it only if a
-    # unique explicit EUR price exists, never convert or relabel USD values.
     page=session.get(clean,timeout=30)
-    if page.status_code==429: raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    if page.status_code==429:
+        raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
     page.raise_for_status()
     prices=_jsonld_eur_prices(page.text)
     if len(set(prices))==1:
@@ -199,12 +242,12 @@ def parse_eur(url):
             raise ValueError('Unplausibler EUR-Preis')
         return price,'unknown'
     if len(set(prices))>1:
-        raise ValueError('Mehrere verschiedene EUR-Angebote in Produktdaten; kein eindeutiger Preis')
+        raise ValueError('Mehrere EUR-Angebote – kein eindeutiger Preis')
     currencies=sorted(set(re.findall(r'"priceCurrency"\s*:\s*"([A-Z]{3})"',page.text)))
-    raise ValueError('Kein nachweislicher DE/EUR-Preis. Shopify-Währung: '
-        +(currency or 'nicht abrufbar')+'; HTML-Währungen: '
-        +(', '.join(currencies) or 'unbekannt')
-        +'. Preis nicht gespeichert – kein automatischer USD/EUR-Umrechnungskurs.')
+    raise ValueError('Kein verifizierter EUR-Preis. '
+        +'Währungsprüfung: '+'; '.join(diagnostics)
+        +'; HTML: '+(', '.join(currencies) or 'unbekannt')
+        +'. USD wurde nicht übernommen.')
 
 def record(url,pid,product_url):
     clean=canonical(product_url)
