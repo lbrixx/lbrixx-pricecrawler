@@ -88,6 +88,15 @@ def brickmo_match_keys(product):
                 values.append('W' + code)
             elif re.fullmatch(r'W\d{3,7}', code):
                 values.append(code[1:])
+    # Lumibricks: Odoo may store numeric 11015, while Brickmo uses LB11015.
+    # Apply aliases ONLY when the Odoo brand is explicitly Lumibricks.
+    if brand == 'lumibricks':
+        for raw in list(values):
+            code = brickmo_index.normalized_sku(raw)
+            if re.fullmatch(r'\d{4,6}', code):
+                values.append('LB' + code)
+            elif re.fullmatch(r'LB\d{4,6}', code):
+                values.append(code[2:])
     # Mattel Brick Shop: apply the retailer suffix to ALL Mattel SKUs,
     # not only JFT16 or a restricted letter/digit pattern.
     # Aliases are for searching only; never change the Odoo SKU.
@@ -220,7 +229,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.11.14 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11.15 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))

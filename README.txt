@@ -1,6 +1,6 @@
-LBrixx V28.11.14 – markenbasierte Zuordnungsvorschläge und Mattel-Diagnose.
-GitHub: app.py und brickmo_index.py ersetzen.
-Anschließend alle Herstellerkategorien neu indexieren, damit Markenprovenienz gespeichert wird.
-Vorhandene Zuordnungen, Angebote und Preise bleiben unverändert.
-Für Mattel bei 0 SKU-Links Produktdetail-Anreicherung nutzen.
-Keine SQL-Migration erforderlich.
+LBrixx Price-Crawler V28.11.15 – Lumibricks SKU-Aliase
+
+GitHub: nur app.py ersetzen.
+Lumibricks: 11015 / L11015 / LB11015 werden als Suchaliase verwendet, nur innerhalb der Marke Lumibricks.
+Keine Datenbankmigration. Bestehende Zuordnungen werden nicht verändert.
+Nach Deployment: Brickmo-Abgleich erneut starten. Falls kein Treffer, Lumibricks-Kategorie erneut indexieren.
