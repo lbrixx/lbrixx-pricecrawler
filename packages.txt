@@ -14,3 +14,4 @@ libgbm1
 libasound2
 libpango-1.0-0
 libcairo2
+chromium
