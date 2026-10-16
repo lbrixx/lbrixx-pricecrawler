@@ -11,7 +11,7 @@ import brickmo_index
 
 st.set_page_config(page_title='LBrixx Preisvergleich', layout='wide', page_icon='lbrixx_logo.png')
 DATA_FILE = 'lbrixx_products.csv'
-COLUMNS = ['db_id','ean','odoo_id','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error']
+COLUMNS = ['db_id','ean','odoo_id','brand_id','brand_name','hidden','deleted','sku','lbrixx_sku','description','lbrixx_price','brickmo_url','photo','brickmo_photo','brickmo_price','shipping','total','availability','last_checked','error','lootstore_url','lootstore_price','lootstore_shipping','lootstore_total','lootstore_availability','lootstore_checked','lootstore_error']
 SEEDS = [
  {'sku':'FO9060','lbrixx_sku':'17003','description':'FunWhole Cyberpunk Future Bus','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82179/funwhole-cyberpunk-fo9060-future-bus-fo9060?number=FO9060'},
  {'sku':'FO9043','lbrixx_sku':'','description':'FunWhole Cyberpunk Polizeiauto','lbrixx_price':'','brickmo_url':'https://www.brickmo.com/themenwelt/fahrzeuge/82178/funwhole-cyberpunk-fo9043-polizeiauto-fo9043'},
@@ -197,7 +197,7 @@ if 'products' not in st.session_state:
         st.error(f'Produktliste konnte nicht geladen werden: {e}'); st.stop()
 
 st.image('lbrixx_logo.png', width=190)
-st.title('LBrixx – Preisvergleich V28.9.2 · PostgreSQL')
+st.title('LBrixx – Preisvergleich V28.11 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -209,7 +209,7 @@ def odoo_read(limit=5, offset=0):
         raise ValueError('Die Odoo-Adresse muss HTTPS verwenden.')
     endpoint=ODOO_URL+'/json/2/product.product/search_read'
     headers={'Authorization':'bearer '+ODOO_KEY,'X-Odoo-Database':ODOO_DB,'Content-Type':'application/json'}
-    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','barcode','image_128'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
+    payload={'domain':[['active','=',True]],'fields':['id','default_code','name','list_price','barcode','image_128','product_tmpl_id'],'limit':limit,'offset':offset,'order':'id asc','context':{'lang':'de_DE'}}
     response=requests.post(endpoint,headers=headers,json=payload,timeout=40)
     if not response.ok:
         raise RuntimeError(f'Odoo HTTP {response.status_code}: API-Zugriff fehlgeschlagen. Prüfe Tarif, Datenbankname und Berechtigungen.')
@@ -218,6 +218,57 @@ def odoo_read(limit=5, offset=0):
         raise RuntimeError('Odoo meldet einen API-Fehler. Bitte Zugriffsrechte und Tarif prüfen.')
     if not isinstance(result,list):
         raise ValueError('Unerwartete Antwort der Odoo-API.')
+    return result
+
+def odoo_brand_values(products):
+    """Read the 'Marke' template attribute via Odoo JSON-2; IDs are Odoo value IDs."""
+    templates = set()
+    for p in products:
+        value = p.get('product_tmpl_id')
+        tid = value[0] if isinstance(value, (list, tuple)) and value else value
+        if isinstance(tid, int):
+            templates.add(tid)
+    if not templates:
+        return {}
+    headers = {'Authorization': 'bearer ' + ODOO_KEY,
+               'X-Odoo-Database': ODOO_DB, 'Content-Type': 'application/json'}
+    def read_model(model, domain, fields):
+        result = []
+        for start in range(0, len(domain[0][2]), 100):
+            batch = domain[0][2][start:start+100]
+            payload = {'domain': [[domain[0][0], 'in', batch]],
+                       'fields': fields, 'limit': 10000, 'context': {'lang': 'de_DE'}}
+            response = requests.post(ODOO_URL + '/json/2/' + model + '/search_read',
+                                     headers=headers, json=payload, timeout=40)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list):
+                raise ValueError('Unerwartete Odoo-Antwort für ' + model)
+            result.extend(data)
+        return result
+    lines = read_model('product.template.attribute.line',
+                       [['product_tmpl_id', 'in', sorted(templates)]],
+                       ['product_tmpl_id', 'attribute_id', 'value_ids'])
+    brand_lines = []
+    value_ids = set()
+    for line in lines:
+        attribute = line.get('attribute_id')
+        attr_name = attribute[1] if isinstance(attribute, (list, tuple)) and len(attribute)>1 else ''
+        if str(attr_name).strip().casefold() == 'marke':
+            brand_lines.append(line)
+            value_ids.update(int(v) for v in line.get('value_ids', []) if isinstance(v, int))
+    if not value_ids:
+        return {}
+    values = read_model('product.attribute.value', [['id', 'in', sorted(value_ids)]], ['name'])
+    names = {int(v['id']): str(v.get('name') or '') for v in values}
+    result = {}
+    for line in brand_lines:
+        tid = line['product_tmpl_id']
+        tid = tid[0] if isinstance(tid, (list, tuple)) else tid
+        ids = [v for v in line.get('value_ids', []) if v in names]
+        # Only one unambiguous brand per product; do not guess when multiple values exist.
+        if len(ids) == 1:
+            result[int(tid)] = (str(ids[0]), names[ids[0]])
     return result
 
 def odoo_merge(existing, products):
@@ -251,6 +302,9 @@ def odoo_merge(existing, products):
             except (ValueError,base64.binascii.Error):
                 pass
         patch={'ean':str(product.get('barcode') or '').strip(),'odoo_id':oid,'description':name,'lbrixx_price':f'{price:.2f}' if price is not None else ''}
+        if product.get('_brand_id'):
+            patch['brand_id'] = product['_brand_id']
+            patch['brand_name'] = product['_brand_name']
         if odoo_photo: patch['photo']=odoo_photo
         if sku: patch['sku']=sku
         if index is not None:
@@ -295,6 +349,12 @@ with st.expander('🔌 Odoo 19 Online – Verbindung und Produktimport',expanded
                 if len(batch)<batch_limit: break
             if max_items==10000 and len(all_products)==10000:
                 st.warning('Import auf 10.000 Produkte begrenzt.')
+            brands=odoo_brand_values(all_products)
+            for item in all_products:
+                tmpl=item.get('product_tmpl_id')
+                tmpl=tmpl[0] if isinstance(tmpl,(list,tuple)) and tmpl else tmpl
+                if tmpl in brands:
+                    item['_brand_id'],item['_brand_name']=brands[tmpl]
             merged,added,updated,skipped=odoo_merge(st.session_state.products,all_products)
             save(merged)
             st.success(f'Odoo-Synchronisierung gespeichert: {added} neu, {updated} aktualisiert, {skipped} übersprungen. Wettbewerberlinks bleiben erhalten.')
@@ -777,6 +837,7 @@ else:
     sort_choices = {'EAN': 'ean',
         'Odoo-ID': 'odoo_id',
         'SKU': 'sku',
+        'Marke': 'brand_name',
         'Beschreibung': 'description',
         'LBrixx-Preis': 'lbrixx_price',
         'Brickmo-Preis': 'brickmo_price',
@@ -862,6 +923,7 @@ else:
             f'<td class="edit"><div class="action-group"><a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
             f'<td class="photo">{img}</td>' +
             f'<td>{cell(r.sku)}</td>' +
+            f'<td>{cell(r.brand_name)}</td>' +
             f'<td>{cell(r.ean)}</td>' +
             f'<td>{cell(r.lbrixx_sku)}</td>' +
             f'<td class="description">{cell(r.description)}</td>' +
@@ -890,8 +952,8 @@ else:
     .lbrixx-table td:nth-child(2) {position:sticky;left:102px;z-index:3;min-width:54px;width:54px;}
     .lbrixx-table th:nth-child(3) {position:sticky;left:156px;z-index:8;min-width:90px;width:90px;}
     .lbrixx-table td:nth-child(3) {position:sticky;left:156px;z-index:3;min-width:90px;width:90px;font-weight:650;}
-    .lbrixx-table th:nth-child(6) {position:sticky;left:246px;z-index:8;min-width:240px;width:240px;}
-    .lbrixx-table td:nth-child(6) {position:sticky;left:246px;z-index:3;min-width:240px;width:240px;max-width:240px;white-space:normal;}
+    .lbrixx-table th:nth-child(7) {position:sticky;left:246px;z-index:8;min-width:240px;width:240px;}
+    .lbrixx-table td:nth-child(7) {position:sticky;left:246px;z-index:3;min-width:240px;width:240px;max-width:240px;white-space:normal;}
     .lbrixx-table .action-group {display:flex;align-items:center;gap:3px;}
     .lbrixx-table .edit a {display:inline-flex;align-items:center;justify-content:center; width:28px;height:27px; border:1px solid rgba(128,128,128,.5); border-radius:5px; text-decoration:none; color:inherit; font-size:14px;}
     .lbrixx-table .edit a:hover {background:rgba(128,128,128,.25);}
@@ -908,8 +970,8 @@ else:
     .lbrixx-table th a:hover {text-decoration:underline!important;}
     </style>
     """
-    headings=['Aktionen','Foto','SKU','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Lootstore-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Differenz LBrixx − Lootstore']
-    sort_fields=['','', 'sku','ean','lbrixx_sku','description','lbrixx_price','brickmo_price','shipping','total','lootstore_price','lootstore_shipping','lootstore_total','difference','loot_difference']
+    headings=['Aktionen','Foto','SKU','Marke','EAN','LBrixx-Nr.','Beschreibung','LBrixx-Preis','Brickmo-Preis ↗','Versand','Gesamtpreis','Lootstore-Preis ↗','Versand','Gesamtpreis','Differenz LBrixx − Brickmo','Differenz LBrixx − Lootstore']
+    sort_fields=['','', 'sku','brand_name','ean','lbrixx_sku','description','lbrixx_price','brickmo_price','shipping','total','lootstore_price','lootstore_shipping','lootstore_total','difference','loot_difference']
     def heading(h,k):
         if not k: return f'<th>{cell(h)}</th>'
         next_dir='desc' if sort_field==k and sort_direction=='asc' else 'asc'
