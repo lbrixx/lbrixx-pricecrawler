@@ -979,21 +979,55 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             with st.spinner('Öffentlichen Lumibricks-Katalog lesen…'):
                 catalog,diagnostics,count=lumibricks_store.catalog()
             suggestions=[]
+            missing=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip(): continue
-                # Search both the Odoo SKU and explicit manufacturer codes from
-                # the product description; never alter the original Odoo SKU.
-                keys = list(dict.fromkeys(
+                keys=list(dict.fromkeys(
                     lumibricks_store.sku_key(candidate)
                     for candidate in brickmo_match_keys(product)
                 ))
-                matches = [catalog[key] for key in keys if key and key in catalog]
-                # Do not suggest ambiguous mappings when two different products
-                # match different aliases of the same Odoo article.
-                unique_urls = {match['url'] for match in matches}
-                if len(unique_urls) == 1:
-                    hit = matches[0]
-                    suggestions.append((str(product.db_id), str(product.sku), hit['url'], hit['title']))
+                matches=[catalog[key] for key in keys if key and key in catalog]
+                unique_urls={hit['url'] for hit in matches}
+                if len(unique_urls)==1:
+                    hit=matches[0]
+                    suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+                elif not matches:
+                    # Prioritize explicit old F/FO manufacturer codes, e.g. 15002 (F9031).
+                    codes=re.findall(r'\(([A-Za-z]{1,3}[- ]?\d{3,8})\)',str(product.description))
+                    codes=[code.replace(' ','').replace('-','') for code in codes if re.fullmatch(r'F(?:O)?\d{3,8}',code.replace(' ','').replace('-',''),re.I)]
+                    if codes: missing.append((product,codes))
+            # The public Shopify catalog may omit products. Search exact legacy
+            # manufacturer SKUs only, and verify them against product variant SKUs.
+            checked=0; targeted_hits=0; search_cache={}; sku_diagnostics=[]
+            if missing:
+                progress=st.progress(0,text=f'Gezielte F-SKU-Nachsuche: 0/{len(missing)} Artikel')
+                import requests as _requests
+                search_session=_requests.Session()
+                try:
+                    for i,(product,codes) in enumerate(missing):
+                        matches=[]
+                        for code in codes:
+                            if code not in search_cache:
+                                if search_cache: time.sleep(1.5)
+                                search_cache[code]=lumibricks_store.search_exact_sku(code,search_session)
+                            hit,reason=search_cache[code]
+                            sku_diagnostics.append(f'{product.sku} / {code}: {reason}')
+                            if hit: matches.append(hit)
+                        checked+=1
+                        urls={hit['url'] for hit in matches}
+                        if len(urls)==1:
+                            hit=matches[0]
+                            suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
+                            targeted_hits+=1
+                        progress.progress((i+1)/len(missing),text=f'Gezielte F-SKU-Nachsuche: {i+1}/{len(missing)} Artikel · {targeted_hits} Treffer')
+                except Exception as exc:
+                    diagnostics.append(f'Gezielte Nachsuche unterbrochen nach {checked} Artikeln: {exc}')
+                finally:
+                    search_session.close()
+            diagnostics.append(f'Gezielte F-SKU-Nachsuche: {checked}/{len(missing)} Artikel geprüft, {targeted_hits} zusätzliche Treffer')
+            if sku_diagnostics:
+                with st.expander('🔬 Diagnose der einzelnen SKU-Prüfungen', expanded=False):
+                    for line in sku_diagnostics: st.text(line)
             st.session_state['lumi_suggestions']=suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)

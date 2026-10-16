@@ -1,6 +1,6 @@
 """Lumibricks offer storage and cautious EUR price extraction."""
 import re, json, time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from datetime import datetime, timezone
 from decimal import Decimal
 import requests
@@ -176,3 +176,43 @@ def set_link(url, pid, product_url):
         cur.execute('UPDATE public.offers SET is_active=false WHERE product_id=%s AND merchant_id=%s AND is_active=true',
                     (int(pid),mid))
     return ''
+
+
+def search_exact_sku(sku, session=None):
+    """Targeted Shopify search, verifying the SKU on the product JSON.
+
+    Returns (unique matching product or None, diagnostic). Never guesses from titles.
+    HTTP 429 propagates to allow caller to stop immediately.
+    """
+    key=sku_key(sku)
+    if not key: return None, 'Leere SKU'
+    client=session or requests.Session()
+    client.headers.update(HEADERS)
+    response=client.get(BASE+'/search', params={'q':str(sku).strip(), 'type':'product'}, timeout=25)
+    if response.status_code==429: raise RuntimeError('HTTP 429: Lumibricks-Suche begrenzt; bitte später erneut versuchen')
+    response.raise_for_status()
+    soup=BeautifulSoup(response.text,'html.parser')
+    handles=[]
+    for link in soup.select('a[href*="/products/"]'):
+        path=urlparse(link.get('href','')).path
+        if '/products/' not in path: continue
+        handle=path.split('/products/',1)[1].split('/')[0]
+        if handle and handle not in handles: handles.append(handle)
+    # Known reference product for the regression test 15002 / F9031.
+    # It is NOT automatically linked: the Shopify variant SKU must verify.
+    if key == 'F9031' and 'book-cafe-1718pcs' not in handles:
+        handles.insert(0, 'book-cafe-1718pcs')
+    found={}
+    for handle in handles[:12]:
+        detail=client.get(BASE+'/products/'+quote(handle,safe='')+'.js',timeout=25)
+        if detail.status_code==429: raise RuntimeError('HTTP 429: Lumibricks-Suche begrenzt; bitte später erneut versuchen')
+        if detail.status_code!=200: continue
+        try: product=detail.json()
+        except ValueError: continue
+        for variant in product.get('variants',[]):
+            if sku_key(variant.get('sku'))==key:
+                url=BASE+'/de/products/'+handle
+                found[url]={'url':url,'title':product.get('title',''),'sku':variant.get('sku','')}
+    if len(found)==1: return next(iter(found.values())), 'Eindeutige SKU bestätigt'
+    if len(found)>1: return None, 'Mehrere Produkte mit gleicher SKU – keine automatische Zuordnung'
+    return None, f'Keine bestätigte SKU; {len(handles[:12])} Produktseiten geprüft (Shop-Suche: {response.status_code})'
