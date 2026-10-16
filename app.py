@@ -1028,6 +1028,18 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                 leading=re.match(r'^([A-Za-z]{0,6}[- ]?\d{3,8})(?=\s*\(|\s+|\s*[-–—:])',full_name)
                 if leading:
                     add_candidate(leading.group(1).replace(' ','').replace('-',''))
+                # Odoo product names can put the legacy manufacturer's SKU
+                # immediately AFTER the current SKU, without parentheses:
+                # '14003 F9036 Western Freight Train'. Restrict extraction
+                # to the second token and require an actual product title after
+                # it, rather than scanning arbitrary numbers (piece counts).
+                initial_codes=re.match(
+                    r'^\s*([A-Za-z]{0,6}\d{3,8})\s+([A-Za-z]{1,6}\d{3,8})\s+(?=[A-Za-z])',
+                    full_name,
+                )
+                if initial_codes:
+                    add_candidate(initial_codes.group(1))
+                    add_candidate(initial_codes.group(2))
                 # lbrixx_sku is a dedicated SKU field and may be numeric.
                 add_candidate(product.get('lbrixx_sku',''))
                 # A SKU field containing "L9113 (18007)" also yields both.
