@@ -239,7 +239,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.21 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.22 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -842,30 +842,46 @@ if edit_param != '':
 
 # Hidden state is persisted in the existing GitHub CSV and retained during Odoo merges.
 # Use the original dataframe index so sorting/filtering never changes edit targets.
-show_hidden=st.checkbox('👁️ Ausgeblendete Artikel anzeigen',value=False,key='show_hidden')
-show_deleted=st.checkbox('🗑️ Gelöschte Artikel zur Wiederherstellung anzeigen',value=False,key='show_deleted')
+# Exklusive Ansichten: ausgeblendete und geloeschte Artikel erscheinen NICHT
+# gemeinsam mit aktiven Artikeln. Geloescht hat Vorrang vor ausgeblendet.
 deleted_mask=df['deleted'].map(checked_status)
-hidden_mask=df['hidden'].astype(str).str.strip().str.lower().isin(['1','true','yes','ja'])
-st.caption(f'{int((~hidden_mask & ~deleted_mask).sum())} sichtbare Artikel · {int((hidden_mask & ~deleted_mask).sum())} ausgeblendet · {int(deleted_mask.sum())} gelöscht')
-display_mask=pd.Series(True,index=df.index)
-if not show_hidden: display_mask &= ~hidden_mask
-if not show_deleted: display_mask &= ~deleted_mask
-# Anzeige-Filter: nur die sichtbare Artikelliste, keine Datenbankänderung.
-brand_values = sorted(
+hidden_mask=df['hidden'].map(checked_status)
+active_mask=~hidden_mask & ~deleted_mask
+hidden_only_mask=hidden_mask & ~deleted_mask
+view_options=['Aktive Artikel', '👁️ Ausgeblendete Artikel', '🗑️ Gelöschte Artikel']
+view_col, brand_col = st.columns([2, 1], gap='medium')
+with view_col:
+    article_view=st.radio(
+        'Artikelstatus', view_options, horizontal=True,
+        key='article_status_view',
+        captions=[
+            f'{int(active_mask.sum())} Artikel',
+            f'{int(hidden_only_mask.sum())} Artikel',
+            f'{int(deleted_mask.sum())} Artikel',
+        ],
+    )
+if article_view == view_options[0]:
+    display_mask=active_mask.copy()
+elif article_view == view_options[1]:
+    display_mask=hidden_only_mask.copy()
+else:
+    display_mask=deleted_mask.copy()
+# Markenfilter beeinflusst nur die Darstellung, niemals die Datenbank.
+brand_values=sorted(
     {str(v).strip() for v in df['brand_name'].fillna('') if str(v).strip()},
     key=str.casefold,
 )
-brand_selection = st.selectbox(
-    'Markenfilter',
-    ['Alle Marken', 'Ohne Marke'] + brand_values,
-    key='article_brand_filter',
-)
+with brand_col:
+    brand_selection=st.selectbox(
+        'Markenfilter', ['Alle Marken', 'Ohne Marke'] + brand_values,
+        key='article_brand_filter',
+    )
 if brand_selection == 'Ohne Marke':
     display_mask &= df['brand_name'].fillna('').astype(str).str.strip().eq('')
 elif brand_selection != 'Alle Marken':
     display_mask &= df['brand_name'].fillna('').astype(str).str.strip().eq(brand_selection)
 df_visible=df.loc[display_mask].copy()
-st.caption(f'{len(df_visible)} Artikel in der aktuellen Auswahl')
+st.caption(f'{len(df_visible)} Artikel in der aktuellen Ansicht · {int(active_mask.sum())} aktiv · {int(hidden_only_mask.sum())} ausgeblendet · {int(deleted_mask.sum())} gelöscht')
 
 if df.empty: st.info('Noch keine Artikel vorhanden.')
 else:
@@ -911,7 +927,7 @@ else:
     df_display = df_display.sort_values('_sort', ascending=(sort_direction == 'asc'),
                                         na_position='last', kind='stable')
     if df_display.empty:
-        st.info('Keine sichtbaren Artikel. Aktiviere „Ausgeblendete Artikel anzeigen“, um Artikel wieder einzublenden.')
+        st.info('Keine Artikel in dieser Ansicht. Bitte Artikelstatus oder Markenfilter ändern.')
     # Render clickable, availability-colored Brickmo price cells as safe HTML.
     # st.dataframe does not reliably combine per-cell background styles with LinkColumn.
     def cell(v):
@@ -976,7 +992,7 @@ else:
     <style>
     .lbrixx-scroll {overflow:auto; max-height:76vh; width:100%; border:1px solid rgba(128,128,128,.28); border-radius:8px; isolation:isolate;}
     .lbrixx-table {width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; line-height:1.3; color:#F5F7FB !important;}
-    .lbrixx-table th {position:sticky; top:0; z-index:5; text-align:left; font-weight:700; padding:9px 8px; background:#283342; color:#fff; white-space:nowrap; border-bottom:1px solid #566272;}
+    .lbrixx-table th {position:sticky; top:0; z-index:5; text-align:left; font-weight:700; padding:9px 8px; background:#365779; color:#fff; white-space:nowrap; border-bottom:3px solid #e6a35c; box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
     .lbrixx-table td {padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.2); vertical-align:middle; background:#141821; color:#F5F7FB !important;}
     .lbrixx-table td:not(.shop-price) a {color:#F5F7FB !important;}
     .lbrixx-table tr:nth-child(even) td:not(.shop-price) {background:#1c222d;}
