@@ -991,30 +991,43 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
             suggestions=[]
             missing=[]
             conflicts=[]
+            sku_diagnostic_candidates=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip():
                     continue
                 # Always inspect BOTH the primary Odoo SKU and every explicit
                 # manufacturer reference. A hit must not short-circuit another SKU.
-                description=str(product.description or '')
-                explicit=[x.replace(' ','').replace('-','') for x in
-                          re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8}|\d{4,8})\)',description)]
-                explicit += re.findall(
-                    r'(?i)\b(?:sku|artikelnummer|artikelnr\.?|ref(?:erenz)?\.?)\s*[:#-]?\s*(\d{4,8})\b',
-                    description)
-                primary=str(product.sku or '').strip()
+                # Odoo often stores an alternate code in the product name,
+                # the SKU itself (e.g. "L9113 (18007)"), or lbrixx_sku.
+                # Inspect all explicit reference fields, not only description.
+                primary=str(product.get('sku', '') or '').strip()
+                reference_fields=[str(product.get(field, '') or '') for field in
+                                  ('sku', 'description', 'lbrixx_sku')]
                 candidates=[]; seen_keys=set()
-                for candidate in [primary]+explicit:
-                    key=lumibricks_store.sku_key(candidate)
-                    if not key or key in seen_keys or not re.fullmatch(r'[A-Z]{0,6}\d{3,8}',key):
-                        continue
-                    seen_keys.add(key)
-                    candidates.append(candidate)
+                def add_candidate(value):
+                    key=lumibricks_store.sku_key(value)
+                    if key and key not in seen_keys and re.fullmatch(r'[A-Z]{0,6}\d{3,8}',key):
+                        seen_keys.add(key)
+                        candidates.append(key)
+                # Always search the primary number, independently of aliases.
+                add_candidate(primary.split('(',1)[0].strip())
+                for field_text in reference_fields:
+                    # Parenthesized legacy numbers: (F9031), (17007).
+                    for raw in re.findall(r'\(\s*([A-Za-z]{0,6}[- ]?\d{3,8})\s*\)',field_text):
+                        add_candidate(raw.replace(' ','').replace('-',''))
+                    # Explicitly labelled manufacturer numbers.
+                    for raw in re.findall(r'(?i)\b(?:sku|artikelnummer|artikelnr\.?|ref(?:erenz)?\.?)\s*[:#-]?\s*([A-Za-z]{0,6}\d{3,8})\b',field_text):
+                        add_candidate(raw)
+                # lbrixx_sku is a dedicated SKU field and may be numeric.
+                add_candidate(product.get('lbrixx_sku',''))
+                # A SKU field containing "L9113 (18007)" also yields both.
+                # Keep a diagnostic record of all candidate keys.
+                sku_diagnostic_candidates.append(f"{primary}: Suchschlüssel {', '.join(candidates) or '(keine)'}")
                 if candidates:
                     missing.append((product,candidates))
             # A single click checks all unlinked products. Keep progress and results
             # in the Streamlit session so rate-limit interruptions can be resumed.
-            checked=0; targeted_hits=0; sku_diagnostics=[]
+            checked=0; targeted_hits=0; sku_diagnostics=sku_diagnostic_candidates
             search_cache=st.session_state.setdefault('lumi_sku_search_cache',{})
             import requests as _requests
             search_session=_requests.Session()
