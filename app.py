@@ -242,7 +242,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.36 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.37 · PostgreSQL')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
 ODOO_DB=str(secrets('ODOO_DATABASE',''))
@@ -985,8 +985,63 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                         suggestions.append((str(product.db_id), str(product.sku),
                                             hit['url'], hit['title'], key))
                         break
-            st.session_state['lumi_suggestions']=suggestions
+            # Fall back to the targeted Shopify search for missing manufacturer SKUs.
+            # Limit the work per click to avoid overloading the shop. Progress is
+            # retained in the Streamlit session for subsequent clicks.
+            checked_skus = st.session_state.setdefault('lumi_target_checked', {})
+            targeted_checks = 0
+            targeted_hits = 0
+            rate_limited = False
+            max_targeted = 8
+            suggested_ids = {entry[0] for entry in suggestions}
+            for _, product in lumi_products.iterrows():
+                if targeted_checks >= max_targeted or rate_limited:
+                    break
+                pid = str(product.db_id)
+                if str(product.lumibricks_url).strip() or pid in suggested_ids:
+                    continue
+                keys = list(dict.fromkeys(
+                    lumibricks_store.sku_key(candidate)
+                    for candidate in brickmo_match_keys(product)
+                    if lumibricks_store.sku_key(candidate)
+                ))
+                # Prefer explicit manufacturer F-codes over generic numeric SKUs.
+                raw_keys = brickmo_match_keys(product)
+                search_codes = list(dict.fromkeys(
+                    str(candidate).strip().upper()
+                    for candidate in raw_keys
+                    if str(candidate).strip().upper().startswith('F')
+                    and lumibricks_store.sku_key(candidate) not in catalog
+                ))
+                if not search_codes:
+                    continue
+                for code in search_codes:
+                    if targeted_checks >= max_targeted or rate_limited:
+                        break
+                    normalized = lumibricks_store.sku_key(code)
+                    if normalized in checked_skus:
+                        hit = checked_skus[normalized]
+                    else:
+                        with st.spinner(f'Fehlende Lumibricks-SKU {code} gezielt prüfen…'):
+                            hit, details = lumibricks_store.targeted_sku_search(code, max_product_checks=3)
+                        targeted_checks += 1
+                        if any('429' in str(detail) for detail in details):
+                            rate_limited = True
+                            diagnostics.append('HTTP 429: Gezielte Suche sofort beendet; später fortsetzen.')
+                            break
+                        checked_skus[normalized] = hit
+                        if targeted_checks < max_targeted:
+                            time.sleep(2)
+                    if hit and normalized in keys:
+                        suggestions.append((pid, str(product.sku), hit['url'], hit['title'], code))
+                        suggested_ids.add(pid)
+                        catalog[normalized] = hit
+                        targeted_hits += 1
+                        break
+            st.session_state['lumi_catalog_diagnostic'] = catalog
+            st.session_state['lumi_suggestions'] = suggestions
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
+            st.caption(f'Gezielte Nachsuche: {targeted_checks} neue SKU-Prüfungen · {targeted_hits} zusätzliche Treffer · maximal {max_targeted} Prüfungen pro Klick. Weitere offene SKUs beim nächsten Klick prüfen.')
             for message in diagnostics: st.warning(message)
         with st.expander('🔬 Lumibricks-SKU-Einzeldiagnose', expanded=False):
             st.caption('Prüft Odoo-SKU, Herstellerartikelnummer aus der Beschreibung und den zuletzt eingelesenen Lumibricks-Katalog. Keine Datenbankänderung.')
