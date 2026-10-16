@@ -81,6 +81,16 @@ def brickmo_match_keys(product):
     # manufacturer codes only when explicitly parenthesized.
     for raw in re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8})\)', description):
         values.append(raw.replace(' ', '').replace('-', ''))
+    # Lumibricks/FunWhole also uses purely numeric legacy SKUs in parentheses,
+    # e.g. "L9118 (17007) ...". These must be matching keys, not Odoo SKU edits.
+    brand_for_codes = str(product.get('brand_name', '') or '').strip().casefold()
+    if brand_for_codes in ('lumibricks', 'funwhole'):
+        for raw in re.findall(r'\((\d{4,8})\)', description):
+            values.append(raw)
+        # Also accept explicitly labelled references, but not arbitrary numbers
+        # such as piece counts or dimensions from a product description.
+        for raw in re.findall(r'(?i)\b(?:sku|artikelnummer|artikelnr\.?|ref(?:erenz)?\.?)\s*[:#-]?\s*(\d{4,8})\b', description):
+            values.append(raw)
     # Odoo names may start with the manufacturer's code followed by the
     # internal SKU, e.g. "L9087 (20007) Alien Frontier: Bounty Hub".
     # Accept only an explicit alphanumeric code at the very beginning;
@@ -980,34 +990,28 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                 catalog,diagnostics,count=lumibricks_store.catalog()
             suggestions=[]
             missing=[]
+            conflicts=[]
             for _,product in lumi_products.iterrows():
                 if str(product.lumibricks_url).strip():
                     continue
-                keys=list(dict.fromkeys(
-                    lumibricks_store.sku_key(candidate)
-                    for candidate in brickmo_match_keys(product)
-                ))
-                matches=[catalog[key] for key in keys if key and key in catalog]
-                unique_urls={hit['url'] for hit in matches}
-                if len(unique_urls)==1:
-                    hit=matches[0]
-                    suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
-                elif not matches:
-                    # All unlinked Lumibricks products, not just legacy F-SKUs.
-                    # Prioritize explicitly supplied alternative manufacturer codes.
-                    description=str(product.description or '')
-                    explicit=[x.replace(' ','').replace('-','') for x in
-                              re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8}|\d{4,8})\)',description)]
-                    primary=str(product.sku or '').strip()
-                    candidates=[]; seen_keys=set()
-                    for candidate in explicit+[primary]:
-                        key=lumibricks_store.sku_key(candidate)
-                        if not key or key in seen_keys or not re.fullmatch(r'[A-Z]{0,6}\d{3,8}',key):
-                            continue
-                        seen_keys.add(key)
-                        candidates.append(candidate)
-                    if candidates:
-                        missing.append((product,candidates))
+                # Always inspect BOTH the primary Odoo SKU and every explicit
+                # manufacturer reference. A hit must not short-circuit another SKU.
+                description=str(product.description or '')
+                explicit=[x.replace(' ','').replace('-','') for x in
+                          re.findall(r'\(([A-Za-z]{1,6}[- ]?\d{3,8}|\d{4,8})\)',description)]
+                explicit += re.findall(
+                    r'(?i)\b(?:sku|artikelnummer|artikelnr\.?|ref(?:erenz)?\.?)\s*[:#-]?\s*(\d{4,8})\b',
+                    description)
+                primary=str(product.sku or '').strip()
+                candidates=[]; seen_keys=set()
+                for candidate in [primary]+explicit:
+                    key=lumibricks_store.sku_key(candidate)
+                    if not key or key in seen_keys or not re.fullmatch(r'[A-Z]{0,6}\d{3,8}',key):
+                        continue
+                    seen_keys.add(key)
+                    candidates.append(candidate)
+                if candidates:
+                    missing.append((product,candidates))
             # A single click checks all unlinked products. Keep progress and results
             # in the Streamlit session so rate-limit interruptions can be resumed.
             checked=0; targeted_hits=0; sku_diagnostics=[]
@@ -1023,8 +1027,12 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                         matches=[]
                         for code in codes:
                             key=lumibricks_store.sku_key(code)
+                            # Catalog and targeted search are independent; test
+                            # every distinct SKU even if another has a hit.
+                            if key in catalog:
+                                matches.append((code,catalog[key]))
+                                sku_diagnostics.append(f'{product.sku} / {code}: Katalogtreffer')
                             if key not in search_cache:
-                                # At most one targeted lookup every 2 seconds.
                                 delay=2.0-(time.monotonic()-last_request)
                                 if delay>0: time.sleep(delay)
                                 last_request=time.monotonic()
@@ -1033,16 +1041,15 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                             hit,reason=search_cache[key]
                             sku_diagnostics.append(f'{product.sku} / {code}: {reason}')
                             if hit:
-                                matches.append(hit)
-                                # Exact verified alternative SKU is sufficient;
-                                # don't spend more requests on its primary alias.
-                                break
+                                matches.append((code,hit))
                         checked+=1
-                        urls={hit['url'] for hit in matches}
-                        if len(urls)==1:
-                            hit=matches[0]
+                        unique={hit['url']:hit for _,hit in matches}
+                        if len(unique)==1:
+                            hit=next(iter(unique.values()))
                             suggestions.append((str(product.db_id),str(product.sku),hit['url'],hit['title']))
                             targeted_hits+=1
+                        elif len(unique)>1:
+                            conflicts.append((str(product.db_id),str(product.sku),matches))
                         progress.progress((i+1)/len(missing),text=f'Gezielte SKU-Nachsuche: {i+1}/{len(missing)} Artikel · {targeted_hits} Treffer')
                         # Save partial results after each completed product.
                         st.session_state['lumi_suggestions']=suggestions.copy()
@@ -1058,6 +1065,7 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                 with st.expander('🔬 Diagnose der einzelnen SKU-Prüfungen', expanded=False):
                     for line in st.session_state['lumi_sku_diagnostics']: st.text(line)
             st.session_state['lumi_suggestions']=suggestions
+            st.session_state['lumi_conflicts']=conflicts
             st.info(f'{count} Shopprodukte geprüft · {len(suggestions)} neue SKU-Vorschläge')
             for message in diagnostics: st.warning(message)
         suggestions=st.session_state.get('lumi_suggestions',[])
@@ -1071,6 +1079,23 @@ with st.expander('💡 Lumibricks – Artikel zuordnen und Preise prüfen', expa
                         try:
                             lumibricks_store.confirm(DB_URL,pid,url)
                             st.session_state['lumi_suggestions']=[s for s in suggestions if s[0]!=pid]
+                            st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                            st.rerun()
+                        except Exception as exc: st.error(str(exc))
+        for pid,sku,match_list in st.session_state.get('lumi_conflicts',[]):
+            st.warning(f'⚠️ LBrixx {sku}: Unterschiedliche Lumibricks-Produkte zu den geprüften Artikelnummern. Bitte manuell entscheiden:')
+            unique_options={}
+            for code,hit in match_list:
+                unique_options.setdefault(hit['url'],(code,hit))
+            for url,(code,hit) in unique_options.items():
+                a,b=st.columns([5,1])
+                with a:
+                    st.markdown(f'**{code}** → {hit["title"][:75]} · [Produkt ansehen]({url})')
+                with b:
+                    if st.button('✓ Zuordnen',key=f'lumi_conflict_{pid}_{lumibricks_store.sku_key(code)}'):
+                        try:
+                            lumibricks_store.confirm(DB_URL,pid,url)
+                            st.session_state['lumi_conflicts']=[c for c in st.session_state.get('lumi_conflicts',[]) if c[0]!=pid]
                             st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
                             st.rerun()
                         except Exception as exc: st.error(str(exc))
