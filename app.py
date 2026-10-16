@@ -379,6 +379,14 @@ with st.expander('📚 Brickmo-Produktindex verwalten', expanded=False):
         if report['truncated']: st.info('Nur ein Teil der Sitemaps verarbeitet. Ein erneuter Lauf kann weitere Seiten erfassen.')
         with st.expander('Katalog-Diagnose'):
             for note in report['notes']: st.caption(note)
+            sample_urls=report.get('sample_urls', [])
+            st.markdown('**20 Beispiel-URLs aus den abgerufenen Sitemaps**')
+            if sample_urls:
+                for n, sample_url in enumerate(sample_urls[:20], start=1):
+                    st.code(f'{n:02d}. {sample_url}', language=None)
+                st.caption('Die Links stammen aus der Sitemap. Sie sind nicht zwingend Produktseiten und werden nur zur Diagnose angezeigt.')
+            else:
+                st.info('Keine Beispiel-URLs verfügbar. Bitte den Brickmo-Katalog erneut aktualisieren.')
 
 with st.expander('🔎 Schnellzuordnung – Shops automatisch durchsuchen', expanded=False):
     st.caption('Brickmo: zuerst Abgleich mit dem gespeicherten Produktindex. Lootstore: bisherige Shopsuche. Jede Zuordnung erfordert deine Bestätigung.')
@@ -667,6 +675,11 @@ else:
             valid=valid_lootstore_url(url)
         css_class='available' if status=='lieferbar' else 'unavailable' if status=='nicht lieferbar' else 'unknown'
         label=cell(price)
+        if not valid:
+            # Missing product association is distinct from an unchecked/failed price query.
+            return ('<td class="shop-price missing-association" title="Kein Produktlink zugeordnet">'
+                    '<span class="missing-mark" aria-label="Keine Produktzuordnung">❗</span>'
+                    '<div class="missing-label">Nicht zugeordnet</div></td>')
         if valid: label=f'<a href="{cell(url)}" target="_blank" rel="noopener noreferrer">{label} ↗</a>'
         err=str(row.error if provider=='brickmo' else row.lootstore_error).strip()
         stamp=cell(short_date(timestamp))
@@ -722,6 +735,9 @@ else:
     .lbrixx-table .edit a:hover {background:rgba(128,128,128,.25);}
     .lbrixx-table .photo img {width:43px;height:43px;object-fit:contain;border-radius:4px;background:white;}
     .lbrixx-table .shop-price {font-weight:700;white-space:nowrap;min-width:105px;}
+    .lbrixx-table .shop-price.missing-association {background:#fff1d8;color:#8c3300;text-align:center;min-width:105px;}
+    .lbrixx-table .missing-mark {display:block;font-size:30px;line-height:1.15;font-weight:900;}
+    .lbrixx-table .missing-label {font-size:10px;font-weight:750;white-space:nowrap;}
     .lbrixx-table .shop-price.available {background:#B7E1A1;color:#173B20;}
     .lbrixx-table .shop-price.unknown {background:#006CB7;color:#fff;}
     .lbrixx-table .shop-price.unavailable {background:#D01012;color:#fff;}
@@ -739,7 +755,7 @@ else:
         return f'<th><a href="?sort={k}&dir={next_dir}" target="_self" style="color:inherit;text-decoration:none">{cell(h)}{arrow}</a></th>'
     table_html=table_css+'<div class="lbrixx-scroll"><table class="lbrixx-table"><thead><tr>'+''.join(heading(h,k) for h,k in zip(headings,sort_fields))+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
     st.html(table_html)
-    st.caption('Preisfelder: LEGO-Hellgrün = lieferbar · LEGO-Blau = unbestätigt · LEGO-Rot = nicht lieferbar. Zeitstempel in UTC. Preis anklicken öffnet den Shop.')
+    st.caption('Preisfelder: Hellgrün = lieferbar · Blau = unbestätigt · Rot = nicht lieferbar · ❗ auf hellem Grund = kein Shop-Produktlink zugeordnet. Zeitstempel in UTC.')
     st.markdown('#### Preise aktualisieren')
     st.caption('Nur Artikel mit hinterlegtem Produktlink werden abgefragt. Zwischen Shop-Anfragen liegen mindestens 2 Sekunden. HTTP 429 stoppt die jeweilige Serie. Zeitangaben sind UTC.')
     a,b,c=st.columns([1,1,1])

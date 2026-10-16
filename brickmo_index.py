@@ -95,6 +95,8 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
     seen = set()
     records = {}
     processed = 0
+    samples = []
+    sample_seen = set()
     while queue and processed < max_sitemaps and len(records) < max_products:
         url = queue.popleft()
         if url in seen or urlparse(url).hostname not in ('www.brickmo.com', 'brickmo.com'):
@@ -113,6 +115,12 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
                         queue.append(loc)
                 notes.append(f'Sitemap-Index: {len(locs)} Unter-Sitemaps')
             else:
+                # Diagnostic: preserve representative real sitemap URLs even if SKU parsing fails.
+                for loc in locs:
+                    if len(samples) >= 20: break
+                    if loc not in sample_seen and urlparse(loc).hostname in ('www.brickmo.com', 'brickmo.com'):
+                        samples.append(loc)
+                        sample_seen.add(loc)
                 count = 0
                 for loc in locs:
                     if valid_product_url(loc):
@@ -136,7 +144,7 @@ def refresh(db_url, max_sitemaps=30, max_products=10000, timeout=12):
                     manufacturer_sku=excluded.manufacturer_sku,product_title=excluded.product_title,
                     source_sitemap=excluded.source_sitemap,indexed_at=now()''', list(records.values()))
             saved = len(records)
-    return {'saved':saved, 'sitemaps':processed, 'pending_sitemaps':len(queue), 'notes':notes[-18:], 'truncated':bool(queue)}
+    return {'saved':saved, 'sitemaps':processed, 'pending_sitemaps':len(queue), 'notes':notes[-18:], 'truncated':bool(queue), 'sample_urls':samples}
 
 
 def lookup(db_url, sku, limit=5):
