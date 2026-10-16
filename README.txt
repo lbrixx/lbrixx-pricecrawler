@@ -1,1 +1,1 @@
-V28.10.1: Abgleich auch über geklammerte Hersteller-SKU in Odoo-Beschreibung (z.B. 15002 (F9031) Book Cafe). Keine automatische Zuordnung; bestehende Daten bleiben unverändert. Auf GitHub nur app.py ersetzen.
+V28.10.2: L9081 und LB9081 werden beim Abgleich als identische Lumibricks-SKU behandelt. F9031/FO9031 bleibt erhalten. Keine Datenbankmigration. Nur app.py und brickmo_index.py ersetzen. Bestehende Zuordnungen bleiben unverändert.

@@ -29,7 +29,11 @@ SKU_RE = re.compile(r'(?<![a-z0-9])(FO?\d{4,})(?![a-z0-9])', re.I)
 def normalized_sku(s):
     s = str(s or '').upper().strip()
     m = re.fullmatch(r'FO?(\d{4,})', s)
-    return 'FO' + m.group(1) if m else s
+    if m:
+        return 'FO' + m.group(1)
+    # Lumibricks short form L9081 in Odoo descriptions = LB9081 on Brickmo.
+    m = re.fullmatch(r'L(B)?(\d{4,6})', s)
+    return 'LB' + m.group(2) if m else s
 
 
 def sku_from_url(url):
@@ -313,9 +317,9 @@ def _category_sku_from_url(url):
             return 'FO' + match.group(1)
         # LumiBricks also uses numeric manufacturer SKUs, e.g. 18010, 17011.
         # Require the identifier to be the final slug token to avoid model numbers in titles.
-        m = re.search(r'(?:^|[-_])(lb\d{3,6}|\d{4,6})$', slug)
+        m = re.search(r'(?:^|[-_])(lb\d{3,6}|l\d{4,6}|\d{4,6})$', slug)
         if m:
-            return m.group(1).upper()
+            return normalized_sku(m.group(1))
     # Other explicitly identified manufacturers: match trailing model number.
     brands = ('wange', 'mould', 'mouldking', 'cada', 'cobi', 'pantasy', 'reobrix')
     if any(token in parts for token in brands):
