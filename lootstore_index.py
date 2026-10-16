@@ -132,3 +132,56 @@ def batch_match_skus(db_url, skus):
         if key in result:
             result[key].append(dict(row))
     return result
+
+
+def diagnose_sku(db_url, sku, timeout=18):
+    """Read-only index check and live Shopify search for a single Pantasy SKU.
+
+    Live candidates are diagnostic only: never insert/confirm a match automatically.
+    """
+    key = match_key(sku)
+    if not re.fullmatch(r'[A-Z0-9_]{3,30}', key):
+        raise ValueError('Bitte eine gültige Artikelnummer eingeben.')
+    stored = []
+    with psycopg.connect(db_url, connect_timeout=12, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.lootstore_catalog') AS table_name")
+            if cur.fetchone()['table_name']:
+                cur.execute('''SELECT product_url, manufacturer_sku, product_title, brand_name
+                    FROM public.lootstore_catalog''')
+                stored = [dict(r) for r in cur.fetchall()
+                          if match_key(r['manufacturer_sku']) == key]
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    live = []
+    errors = []
+    # Shopify predictive search finds products missing from the collection feed.
+    try:
+        response = session.get('https://lootstore.de/search/suggest.json',
+            params={'q':key,'resources[type]':'product','resources[limit]':10}, timeout=timeout)
+        response.raise_for_status()
+        products = response.json().get('resources',{}).get('results',{}).get('products',[])
+        for p in products:
+            handle = str(p.get('handle') or '').strip()
+            url = str(p.get('url') or '')
+            if not handle and '/products/' in url:
+                handle = url.split('/products/',1)[1].split('?',1)[0].split('/',1)[0]
+            if not re.fullmatch(r'[a-zA-Z0-9_-]+',handle):
+                continue
+            # Product endpoint exposes actual vendor and variant SKU.
+            try:
+                detail = session.get('https://lootstore.de/products/'+handle+'.js',timeout=timeout)
+                detail.raise_for_status()
+                item = detail.json()
+                skus = [str(v.get('sku') or '') for v in item.get('variants',[])]
+                title = str(item.get('title') or p.get('title') or '')
+                vendor = str(item.get('vendor') or '')
+                if any(match_key(s) == key for s in skus):
+                    live.append({'url':'https://lootstore.de/products/'+handle,
+                                 'title':title,'brand':vendor,'skus':skus,
+                                 'pantasy':brand(vendor)=='pantasy'})
+            except (requests.RequestException, ValueError) as exc:
+                errors.append(f'Produkt {handle}: {type(exc).__name__}: {str(exc)[:110]}')
+    except (requests.RequestException, ValueError) as exc:
+        errors.append(f'Shopify-Suche: {type(exc).__name__}: {str(exc)[:110]}')
+    return {'sku':key,'stored':stored,'live':live,'errors':errors}
