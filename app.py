@@ -1501,11 +1501,11 @@ else:
                         # Localization HTTP success and the confirmed #DE variant are checked in the scraper.
                         entry.update(status='ok',usd=str(result['usd']),eur=str(result['eur_estimate']),
                                      variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
-                                     preview_revision=3,available=True,sale_usd=str(result.get('sale_usd') or ''),
+                                     preview_revision=4,available=True,sale_usd=str(result.get('sale_usd') or ''),
                                      regular_usd=str(result.get('regular_usd') or ''),
                                      before_usd=str(result['before_usd']),note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence')) if result.get('promotion_evidence') else 'EUR aus USD berechnet'))
                     except Exception as exc:
-                        entry.update(status='error',error=str(exc)[:450])
+                        entry.update(status='error',error=str(exc)[:450],note=str(entry.get('note') or ''))
                         if '429' in str(exc): interrupted=True
                     entries.append(entry)
                     lumibricks_store.save_bulk_preview(DB_URL,bid,entries,state='interrupted' if interrupted else 'running')
@@ -1553,7 +1553,7 @@ else:
                 st.info('Ein Testlauf ist noch in Bearbeitung oder wurde vorzeitig unterbrochen. Keine Freigabe möglich.')
             elif state=='approved':
                 st.success('Diese Vorschau wurde bereits gesammelt freigegeben. Eine erneute Übernahme ist gesperrt.')
-            elif state=='ready' and valid and not all(e.get('preview_revision')==3 for e in valid):
+            elif state=='ready' and valid and not all(e.get('preview_revision')==4 for e in valid):
                 st.warning('Diese Vorschau wurde vor der Aktionspreis-/Verfügbarkeitsprüfung erstellt. Bitte einen neuen vollständigen Testlauf starten; alte Vorschau kann nicht freigegeben werden.')
             elif state=='ready' and valid:
                 st.warning(f'Freigabe würde **{len(valid)} berechnete EUR-Preise** in current_prices übernehmen '

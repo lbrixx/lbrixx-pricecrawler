@@ -818,7 +818,22 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                 currency=str(after['cart']['data'].get('currency') or '').upper()
                 if currency!='USD': raise ValueError('Shopify-Währung nicht USD: '+currency)
                 variants=after['product']['data'].get('variants') or []
-                selected,reason,requested=_preview_variant(variants,product_url)
+                try:
+                    selected,reason,requested=_preview_variant(variants,product_url)
+                except ValueError as variant_error:
+                    # Report any single clearly German-related SKU even when
+                    # an old REDEEM format prevents a verified sellable #DE match.
+                    candidates=[v for v in variants if re.search(r'#DE(?:$|[_-])',str(v.get('sku') or ''),re.I)]
+                    if len(candidates)==1:
+                        candidate=candidates[0]
+                        return dict(usd=None,eur_estimate=None,factor=factor,
+                            sku=str(candidate.get('sku') or ''),variant_id=str(candidate.get('id') or ''),
+                            variant_count=len(variants),available=False,
+                            price_review='DE-Kandidat vorhanden, aber nicht als reguläre #DE-Variante verifiziert: '+str(variant_error),
+                            before_usd=None,regular_usd=None,sale_usd=None,
+                            promotion_evidence='',currency=currency,url=clean)
+                    raise
+
                 cents=selected.get('price')
                 if isinstance(cents,bool) or not isinstance(cents,int) or cents<=0: raise ValueError('Ungültiger Variantenpreis')
                 if selected.get('available') is not True:
@@ -832,73 +847,80 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                 usd=Decimal(cents)/100
                 compared=selected.get('compare_at_price')
                 regular_usd=Decimal(compared)/100 if isinstance(compared,int) and not isinstance(compared,bool) and compared>cents else None
-                # V28.11.64: Discounts are frequently rendered by the storefront,
-                # while Shopify product.js still exposes the undiscounted DE price.
-                # Inspect ONLY the visible main-product price/info area and accept
-                # a single product-specific promotion rate. Do not read discounts
-                # from recommended products elsewhere on the page.
+                # V28.11.65: A general store discount (often 10%) must NEVER
+                # become a product-specific reduced price. Accept promotional
+                # prices only when two visible monetary amounts and the discount
+                # form a consistent price pair adjacent to the product heading.
                 promotion_review=None
                 promotion_evidence=''
                 if regular_usd is None:
                     try:
                         page.goto(clean+'?variant='+str(selected['id']),wait_until='domcontentloaded',timeout=30000)
-                        page.wait_for_timeout(1500)
-                        display=page.evaluate('''() => {
-                          const selectors=[
-                            'main .product__info-wrapper', 'main .product__info-container',
-                            'main .product-info', 'main .product-single__meta',
-                            'main .product__details', 'main [class*="product-info"]',
-                            'main [class*="product__info"]'];
-                          let roots=[];
-                          for (const selector of selectors) {
-                            roots=[...document.querySelectorAll(selector)].filter(e=>e.getClientRects().length && e.innerText.trim().length>10);
-                            if(roots.length===1) break;
+                        page.wait_for_timeout(1300)
+                        display=page.evaluate(r'''() => {
+                          const shown=e=>!!(e && e.getClientRects().length && getComputedStyle(e).visibility!=='hidden');
+                          const heading=[...document.querySelectorAll('main h1, h1')].find(e=>shown(e) && e.innerText.trim().length>2);
+                          if(!heading) return {target:false,reason:'Kein sichtbarer Produkttitel',priceTexts:[],text:''};
+                          // Choose the nearest product detail block with prices,
+                          // never scan banners, recommendations or entire page.
+                          let root=null;
+                          let node=heading.parentElement;
+                          for(let i=0;node && i<6;i++,node=node.parentElement){
+                            const t=(node.innerText||'').slice(0,1600);
+                            const nums=t.match(/(?:\$|USD\s*)\s*\d[\d,.]*/gi)||[];
+                            if(nums.length>=2 && t.length<1800){root=node;break;}
                           }
-                          if(roots.length!==1) { const main=document.querySelector('main'); const text=main ? main.innerText.slice(0,1800) : ''; return {unique:false,text,priceTexts:[]}; }
-                          let root=roots[0];
-                          // The nearest promotion label must be inside the main
-                          // product info; cart, banners, recommendations excluded.
-                          let visible=[...root.querySelectorAll('*')].filter(e=>e.getClientRects().length && e.children.length===0);
-                          let texts=visible.map(e=>e.innerText.trim()).filter(Boolean);
-                          return {unique:true,text:texts.slice(0,200).join(' '),
-                                  priceTexts:texts.filter(t=>t.length<90 && /[$€]|off|rabatt|%/i.test(t)).slice(0,80)};
+                          if(!root){
+                            // Some themes separate title and price into siblings.
+                            // Inspect only the first part of the nearest main block.
+                            let info=heading.closest('.product__info-wrapper,.product-info,.product__info-container,.product-single__meta,[class*="product-info"]');
+                            if(info && shown(info)) root=info;
+                          }
+                          if(!root) return {target:false,reason:'Kein eindeutiger Produktpreisblock',priceTexts:[],text:''};
+                          const leaves=[...root.querySelectorAll('*')].filter(e=>shown(e) && e.children.length===0);
+                          const texts=leaves.map(e=>(e.innerText||'').trim()).filter(Boolean);
+                          let firstPrice=texts.findIndex(t=>/(?:\$|USD\s*)\s*\d/.test(t));
+                          if(firstPrice<0) return {target:false,reason:'Produktpreis nicht in USD sichtbar',priceTexts:[],text:''};
+                          // Sale and compare prices are typically next to each
+                          // other. Never accept remote discount banners.
+                          const group=texts.slice(Math.max(0,firstPrice-2),firstPrice+7);
+                          return {target:true,text:group.join(' '),priceTexts:group};
                         }''')
-                        if not display.get('unique'):
-                            # Ambiguous document structure must not authorize a discount.
-                            if re.search(r'\b(?:[1-9][0-9]?\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*[1-9][0-9]?\s*%)',display.get('text',''),re.I):
-                                promotion_review='Aktionspreis nicht verifizierbar: Hauptproduktbereich nicht eindeutig'
-                        else:
-                            # Product-level percentages, not banners from suggestions.
-                            content=' '.join(display.get('priceTexts',[]))
+                        if display.get('target'):
+                            content=' '.join(display.get('priceTexts') or [])
+                            amounts=[]
+                            for raw in re.findall(r'(?:\$\s*|USD\s*)([0-9]{1,4}(?:,[0-9]{3})*\.[0-9]{2})',content,re.I):
+                                amounts.append(Decimal(raw.replace(',','')))
+                            amounts=sorted(set(amounts))
                             discounts={int(x or y) for x,y in re.findall(
                                 r'(?<!\d)([1-9][0-9]?)\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*([1-9][0-9]?)\s*%',
                                 content,re.I)}
-                            if len(discounts)>1:
-                                promotion_review='Mehrere Rabattangaben im Hauptproduktbereich: '+', '.join(map(str,sorted(discounts)))
-                            elif len(discounts)==1:
+                            if len(discounts)==1 and len(amounts)>=2:
                                 pct=next(iter(discounts))
                                 expected=(usd*(Decimal(100)-Decimal(pct))/100).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
-                                amounts=[]
-                                for raw in re.findall(r'\$\s*([0-9]{1,4}(?:,[0-9]{3})*\.[0-9]{2})',content):
-                                    amounts.append(Decimal(raw.replace(',','')))
-                                matching=[x for x in set(amounts) if abs(x-expected)<=Decimal('0.03')]
-                                if len(matching)==1:
-                                    promo_price=matching[0]
-                                    promotion_evidence=f'{pct}% Rabatt, Preis im Hauptproduktbereich sichtbar'
-                                elif not matching and 0 < expected < usd:
-                                    # Site can render the action amount in EUR or
-                                    # omit its USD equivalent in the bot session.
-                                    # The sale is derived from an unambiguous
-                                    # product-level percentage, NOT verified as
-                                    # a direct displayed USD price.
-                                    promo_price=expected
-                                    promotion_evidence=f'{pct}% Rabatt am Hauptprodukt; USD-Aktionspreis aus Prozent berechnet'
-                                else:
-                                    promo_price=None
-                                    promotion_review=f'{pct}% Rabatt, mehrere widersprüchliche Aktionspreise'
-                                if promo_price is not None:
+                                old_matches=[x for x in amounts if abs(x-usd)<=Decimal('0.03')]
+                                sale_matches=[x for x in amounts if abs(x-expected)<=Decimal('0.03') and x < usd]
+                                if len(old_matches)==1 and len(sale_matches)==1:
                                     regular_usd=usd
-                                    usd=promo_price
+                                    usd=sale_matches[0]
+                                    promotion_evidence=f'{pct}% Rabatt; regulärer und reduzierter USD-Preis am Hauptprodukt bestätigt'
+                                else:
+                                    # Discount is near the product but not
+                                    # verifiable for the DE-market variant.
+                                    promotion_review=f'Aktionspreis nicht bestätigt: {pct}% und Preis-Paar passen nicht zur DE-Variante ({usd} USD)'
+                            elif len(discounts)>1 and len(amounts)>=2:
+                                promotion_review='Mehrere produktnahe Rabattangaben; kein eindeutiger Aktionspreis'
+                            elif len(amounts)>=2 and len(discounts)==0:
+                                # Compare-at price can be rendered without a
+                                # percent; require the higher price to equal the
+                                # confirmed DE regular price.
+                                sale=[x for x in amounts if x<usd and x>0]
+                                if any(abs(x-usd)<=Decimal('0.03') for x in amounts) and len(sale)==1:
+                                    regular_usd=usd
+                                    usd=sale[0]
+                                    promotion_evidence='Reduzierter USD-Preis und regulärer DE-Preis im Hauptprodukt bestätigt'
+                            # If only a generic 10% banner or a lone percentage
+                            # exists, do NOT reduce the price or fail the product.
                     except Exception as promo_exc:
                         promotion_review='Aktionsprüfung nicht verlässlich: '+str(promo_exc)[:180]
                 eur=(usd*factor).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
@@ -962,7 +984,7 @@ def approve_bulk_preview(db_url,bid):
         if batch['state']!='ready': raise ValueError('Nur vollständig abgeschlossene Vorschauen dürfen freigegeben werden')
         entries=batch['entries']
         successes=[e for e in entries if e.get('status')=='ok']
-        if not successes or any(e.get('preview_revision')!=3 for e in successes):
+        if not successes or any(e.get('preview_revision')!=4 for e in successes):
             raise ValueError('Veraltete Preisvorschau: Aktionspreis-/Verfügbarkeitsprüfung fehlt. Bitte neu erstellen.')
         if not successes: raise ValueError('Keine gültigen Preise zur Freigabe')
         if len({int(e['product_id']) for e in successes})!=len(successes):

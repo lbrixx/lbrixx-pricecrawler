@@ -1,0 +1,21 @@
+LBrixx Price-Crawler V28.11.65 – Sonderpreisprüfung und DE-Variantendiagnose
+
+Installation: app.py und lumibricks_store.py ersetzen. Bestehende Anforderungen
+für Playwright/Chromium bleiben unverändert; keine Migration notwendig.
+
+Änderungen:
+- Bloße 10-%-Hinweise oder Gutscheinbanner werden NICHT als Artikelrabatt verwendet.
+- Sonderpreis wird nur übernommen, wenn die sichtbaren USD-Beträge im
+  Produktpreisbereich eindeutig den bestätigten DE-Marktpreis und den
+  rechnerisch konsistenten rabattierten Preis bilden.
+- Fehlende, ausverkaufte oder nicht reguläre DE-Varianten werden nicht
+  als verfügbares Angebot gewertet; identifizierte SKU/ID erscheinen in
+  der Diagnose, soweit Shopify sie liefert.
+- Alte Sammelvorschauen (Revision 3) sind nicht zur Preisübernahme zugelassen.
+  Ein neuer Kompletttest erzeugt Revision 4.
+
+Vor Freigabe bitte besonders 14012/L9102 (-20%), 19002/F9051 (-35%),
+L9071 (-40%), F9069 (nicht verfügbar) und bisherige 10-%-Fehler prüfen.
+
+Nicht live gegen Lumibricks getestet. In zweifelhaften Fällen bleibt eine
+Preisübernahme gesperrt.
