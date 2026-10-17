@@ -234,17 +234,60 @@ def _browser_eur_price(clean):
                 # Check whether browser automatically selected EUR. Otherwise
                 # click a visible currency selector (no assumption about Shopify endpoints).
                 def state():
-                    return page.evaluate("""() => {
-                      const visible = e => !!(e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
-                      const selectors = ['main .price', 'main .product__price', 'main [class*="price-item"]',
-                        'main [class*="product-price"]', '.product-info .price',
-                        '[data-product-price]', '[data-price-wrapper]', '.product-single__price'];
-                      let texts=[];
-                      for(const sel of selectors) for(const el of document.querySelectorAll(sel)) {
-                        if(visible(el)) texts.push((el.innerText||el.textContent||'').trim().slice(0,150));
+                    # Scope to the principal PDP, not product cards, recommendations,
+                    # hidden widgets, compare-at (struck-through) or unit prices.
+                    return page.evaluate(r"""() => {
+                      const visible = e => !!e.getClientRects().length &&
+                        getComputedStyle(e).visibility !== 'hidden' &&
+                        getComputedStyle(e).display !== 'none';
+                      const money = /(?:€\s*\d[\d.,\s]*|\d[\d.,\s]*\s*(?:€|EUR)|EUR\s*\d[\d.,\s]*)/i;
+                      const clean = e => (e.innerText || e.textContent || '').replace(/\s+/g,' ').trim();
+                      const roots = [
+                        '[data-section-type="product"]',
+                        'main product-info', 'main .product__info-wrapper',
+                        'main .product__info-container', 'main .product-info',
+                        'main .product-single__meta', 'main [data-product-id]',
+                        'main .product-detail', 'main .product-form',
+                        'main [class*="product-info"]', 'main [class*="product__info"]'
+                      ];
+                      let root = null;
+                      for (const sel of roots) {
+                        const found = Array.from(document.querySelectorAll(sel)).find(visible);
+                        if (found) { root=found; break; }
                       }
-                      return {prices:[...new Set(texts)].filter(Boolean).slice(0,25),
-                        title:document.title, body:(document.body?.innerText||'').slice(0,2000)};
+                      if (!root) root = document.querySelector('main') || document.body;
+                      const isExcluded = el => !!el.closest(
+                        's, del, [class*="compare"], [class*="old-price"], [class*="regular-price"], '+
+                        '[class*="recommend"], [class*="related"], [class*="recently"], '+
+                        '[class*="upsell"], [class*="cross-sell"], [class*="unit-price"], '+
+                        '[aria-hidden="true"]');
+                      const tiers = [
+                        '[data-product-price]', '[data-price-current]', '[data-current-price]',
+                        '[itemprop="price"]', '.price__sale .price-item--sale',
+                        '.price-item--sale', '.product__price', '.product-single__price',
+                        '.product-price', '.product-price__price', '.price__current',
+                        '.current-price', '[class*="sale-price"]',
+                        '[class*="price-item--regular"]', '.price-item--regular', '.price'
+                      ];
+                      let candidates=[];
+                      for (let tier=0;tier<tiers.length;tier++) {
+                        for (const e of root.querySelectorAll(tiers[tier])) {
+                          if (!visible(e) || isExcluded(e)) continue;
+                          const inner = Array.from(e.querySelectorAll(tiers.join(',')))
+                            .some(child => child !== e && visible(child) && !isExcluded(child) && money.test(clean(child)));
+                          if (inner) continue; // prevent counting a price and its wrapper twice
+                          const t=clean(e);
+                          if (t && t.length<110 && money.test(t))
+                            candidates.push({tier,selector:tiers[tier],text:t.slice(0,105),
+                              html:e.outerHTML.slice(0,280)});
+                        }
+                      }
+                      const unique = [];
+                      for(const c of candidates)
+                        if(!unique.some(x=>x.tier===c.tier && x.text===c.text)) unique.push(c);
+                      return {prices:unique.map(x=>x.text).slice(0,20),
+                        candidates:unique.slice(0,25),root:root.tagName+'.'+root.className.toString().slice(0,70),
+                        title:document.title};
                     }""")
                 initial=state()
                 if not any('€' in x or 'EUR' in x for x in initial['prices']):
@@ -286,37 +329,49 @@ def _browser_eur_price(clean):
         finally:
             browser.close()
 
-    def extract(details):
-        euro=[]
-        for content in details['prices']:
-            # Require euro symbol or a standalone EUR tag on the price component.
-            if not re.search(r'€|\bEUR\b',content,re.I):
+    def amounts(text):
+        out=[]
+        for left,right in re.findall(r'(?:(?:€\s*|EUR\s*)([0-9][0-9.,\s]*))|(?:([0-9][0-9.,\s]*)\s*(?:€|EUR))',text,re.I):
+            raw=(left or right).strip().replace(' ','').replace('\xa0','')
+            if not raw: continue
+            if ',' in raw:
+                raw=raw.replace('.','').replace(',','.')
+            elif raw.count('.')>1:
+                raw=raw.replace('.','')
+            try:
+                amount=Decimal(raw)
+                if Decimal('0')<amount<Decimal('100000'):
+                    out.append(amount)
+            except Exception:
                 continue
-            # Product price components sometimes include struck-out compare-at prices.
-            # Refuse ambiguous multiple amounts instead of guessing which one to use.
-            amounts=re.findall(r'(?:(?:€\s*|EUR\s*)([0-9][0-9.,\s]*))|(?:([0-9][0-9.,\s]*)\s*(?:€|EUR))',content,re.I)
-            for left,right in amounts:
-                raw=(left or right).strip().replace(' ','').replace('\xa0','')
-                if not raw: continue
-                if ',' in raw:
-                    raw=raw.replace('.','').replace(',','.')
-                elif raw.count('.') > 1:
-                    raw=raw.replace('.','')
-                try:
-                    amount=Decimal(raw)
-                    if Decimal('0') < amount < Decimal('100000'):
-                        euro.append(amount)
-                except Exception:
-                    continue
-        return set(euro)
-    first_prices=extract(first)
-    second_prices=extract(second)
-    common=first_prices & second_prices
-    if len(common)==1 and len(first_prices)==1 and len(second_prices)==1:
-        return next(iter(common)), 'unknown'
-    raise ValueError('Browser zeigt keinen stabilen, eindeutigen EUR-Produktpreis '
-                     f'(Preisfelder nach JavaScript: {second["prices"][:6]!r}; '
-                     f'EUR-Kandidaten: {sorted(second_prices)}). Kein Preis gespeichert.')
+        return set(out)
+
+    def choose(details):
+        # A unique price at the highest-confidence DOM selector tier wins.
+        # Do not fall back to unrelated monetary amounts elsewhere on the page.
+        candidates=details.get('candidates',[])
+        tiers=sorted({c['tier'] for c in candidates})
+        for tier in tiers:
+            relevant=[c for c in candidates if c['tier']==tier]
+            matches=set()
+            for candidate in relevant:
+                matches.update(amounts(candidate['text']))
+            if len(matches)==1:
+                return next(iter(matches)),tier,relevant
+            if len(matches)>1:
+                return None,tier,relevant
+        return None,None,[]
+
+    first_amount,first_tier,_=choose(first)
+    second_amount,second_tier,selected=choose(second)
+    if (first_amount is not None and first_amount==second_amount and
+            first_tier==second_tier):
+        return second_amount,'unknown'
+    raise ValueError('Browser: Hauptproduktpreis nicht eindeutig oder nicht stabil '
+                     f'(Bereich: {second.get("root")}; '
+                     f'bevorzugte Preisfelder: {[(x["selector"],x["text"]) for x in selected][:5]!r}; '
+                     f'Kandidaten: {[(x["selector"],x["text"]) for x in second.get("candidates",[])][:8]!r}). '
+                     'Kein Preis gespeichert.')
 
 
 def parse_eur(url):
@@ -374,7 +429,7 @@ def parse_eur(url):
         raise ValueError('Kein verifizierter EUR-Preis. Währungsprüfung: '
                          + '; '.join(diagnostics)
                          + '; HTML: ' + (', '.join(currencies) or 'unbekannt')
-                         + '; Browser: ' + str(exc)[:440]
+                         + '; Browser: ' + str(exc)[:1100]
                          + '. USD wurde nicht übernommen.') from exc
 
 def record(url,pid,product_url):

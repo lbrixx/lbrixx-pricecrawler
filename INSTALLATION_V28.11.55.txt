@@ -1,0 +1,14 @@
+LBrixx Price-Crawler V28.11.55 — Lumibricks Hauptpreis-Erkennung
+
+1. app.py und lumibricks_store.py wie bisher im GitHub-Repository ersetzen.
+2. Playwright/Chromium-Konfiguration aus V28.11.54 unverändert beibehalten.
+3. Einen verknüpften Artikel, z.B. 15002, per Einzelpreisprüfung testen.
+4. Die Shop-Diagnose nach dem Test kontrollieren.
+
+Änderung: Browser-Preisextraktion priorisiert sichtbare Preisfelder im
+Hauptproduktbereich. Vergleichspreise, Empfehlungen und versteckte
+Elemente werden ignoriert. Mehrdeutige oder instabile Preise werden
+weiterhin NICHT gespeichert. Kein hartcodierter Referenzpreis.
+
+Hinweis: Live-Erfolg gegen die Lumibricks-Website wurde nicht verifiziert.
+Es ist weiterhin möglich, dass der konkrete Shop andere Selektoren nutzt.
