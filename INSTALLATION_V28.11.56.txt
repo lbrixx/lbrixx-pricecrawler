@@ -1,0 +1,15 @@
+V28.11.56 – Lumibricks USD→EUR-Schätzmodus
+
+Ersetze app.py und lumibricks_store.py aus diesem Archiv.
+Unter "Einzelnen Artikel aktualisieren" einen zugeordneten Artikel auswählen.
+Expander "Lumibricks USD→EUR-Testmodus" öffnen und die Test-Taste drücken.
+
+Der USD-Preis wird über die Shopify-Produkt-API geladen, nur wenn cart.js USD bestätigt.
+Es wird die eindeutige #DE-Variante verwendet, ersatzweise die einzige Variante.
+EUR-Schätzung = kaufmännisch gerundeter USD-Preis × 0,892 auf ganze EUR.
+
+WICHTIG: Das Ergebnis ist eine Schätzung, kein bestätigter Shoppreis.
+Dieser Testmodus schreibt NICHTS in die Preis- oder Historientabellen.
+Die bestehende Einzel- und Sammelpreisaktualisierung bleibt unverändert.
+
+Chromium/Playwright-Konfiguration aus V28.11.55 unverändert.

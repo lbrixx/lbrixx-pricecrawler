@@ -2,7 +2,7 @@
 import re, json, time
 from urllib.parse import urlparse, quote
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import requests
 import psycopg
 from psycopg.rows import dict_row
@@ -512,3 +512,51 @@ def search_exact_sku(sku, session=None):
     if len(found)==1: return next(iter(found.values())), 'Eindeutige SKU bestätigt'
     if len(found)>1: return None, 'Mehrere Produkte mit gleicher SKU – keine automatische Zuordnung'
     return None, f'Keine bestätigte SKU; {len(handles[:12])} Produktseiten geprüft (Shop-Suche: {response.status_code})'
+
+
+# V28.11.56: Nur Vorschau – keine Persistierung und kein bestätigter EUR-Preis.
+PREVIEW_USD_TO_EUR = Decimal('0.892')
+
+def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
+    """Shopify-USD-Preis der passenden Variante als EUR-SCHÄTZUNG anzeigen.
+
+    Schreibt weder in current_prices noch in price_history. Der Faktor ist
+    ein beobachteter Testfaktor, kein verifizierter Wechselkurs des Shops.
+    """
+    clean = canonical(product_url)
+    slug = urlparse(clean).path.rstrip('/').split('/')[-1]
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    currency = _shopify_currency(session)
+    if currency != 'USD':
+        raise ValueError(f'USD-Test abgebrochen: Shopify-Warenkorb meldet {currency}, nicht USD')
+    response = session.get(BASE + '/de/products/' + quote(slug, safe='') + '.js',
+                           timeout=25, headers={'Accept':'application/json','Cache-Control':'no-cache'})
+    if response.status_code == 429:
+        raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
+    response.raise_for_status()
+    try:
+        product = response.json()
+    except (ValueError,TypeError) as exc:
+        raise ValueError('Produkt-JSON ungültig') from exc
+    variants = product.get('variants') or []
+    german = [v for v in variants if str(v.get('sku','')).strip().upper().endswith('#DE')]
+    if len(german) == 1:
+        chosen = german[0]
+    elif len(german) == 0 and len(variants) == 1:
+        chosen = variants[0]
+    else:
+        raise ValueError('DE-Variante nicht eindeutig; Testpreis nicht berechnet')
+    raw = chosen.get('price')
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        raise ValueError('Shopify-Variantenpreis fehlt oder hat kein erwartetes Cent-Format')
+    usd = Decimal(raw) / Decimal(100)
+    if not Decimal('0') < usd < Decimal('100000'):
+        raise ValueError('Unplausibler USD-Preis')
+    factor = Decimal(str(factor))
+    if not Decimal('0') < factor < Decimal('2'):
+        raise ValueError('Ungültiger Umrechnungsfaktor')
+    eur_estimate = (usd * factor).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+    return {'usd': usd, 'eur_estimate': eur_estimate, 'factor': factor,
+            'sku': str(chosen.get('sku') or ''), 'url': clean,
+            'currency': currency, 'status': 'NICHT VERIFIZIERTE SCHÄTZUNG'}

@@ -1415,6 +1415,30 @@ else:
     chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
     provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Lumibricks','Brickmo und Lootstore','Alle drei'])
     one_update=st.button('🔄 Gewählten Artikel aktualisieren')
+    with st.expander('🧪 Lumibricks USD→EUR-Testmodus (ohne Speicherung)', expanded=False):
+        st.caption('Berechnet mit dem vorläufigen Faktor 0,892 und rundet auf volle Euro. '
+                   'Das Ergebnis ist eine Schätzung, KEIN bestätigter Shoppreis. '
+                   'Es werden keine Preise oder Preisverläufe in PostgreSQL geändert.')
+        if st.button('🧪 EUR-Schätzung nur für diesen Artikel berechnen', key='lumi_usd_preview'):
+            if chosen == 'Bitte Artikel wählen':
+                st.warning('Bitte zuerst einen Artikel bei „Einzelnen Artikel aktualisieren“ auswählen.')
+            else:
+                preview_row = df.loc[selectable[chosen]]
+                preview_url = str(preview_row.lumibricks_url).strip()
+                if not lumibricks_store.valid_url(preview_url):
+                    st.warning('Dieser Artikel hat keinen gültigen Lumibricks-Produktlink.')
+                else:
+                    try:
+                        estimate = lumibricks_store.preview_usd_to_eur(preview_url)
+                        st.warning(f"NUR TEST / NICHT GESPEICHERT – {preview_row.sku}: "
+                                   f"{estimate['usd']} USD × {estimate['factor']} "
+                                   f"→ ungefähr {estimate['eur_estimate']} EUR "
+                                   f"(Shopify-SKU {estimate['sku']}).")
+                        st.caption('USD-Shopwährung bestätigt; EUR-Wert aus beobachtetem Faktor berechnet, '
+                                   'nicht von Lumibricks als EUR-Preis bestätigt.')
+                    except Exception as exc:
+                        st.error(f'Lumibricks-Test fehlgeschlagen: {exc}')
+
     if row_refresh_index is not None:
         # Different providers persist via their existing, proven pathways.
         r=df.loc[row_refresh_index]
