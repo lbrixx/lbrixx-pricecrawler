@@ -1415,6 +1415,106 @@ else:
     chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
     provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Lumibricks','Brickmo und Lootstore','Alle drei'])
     one_update=st.button('🔄 Gewählten Artikel aktualisieren')
+    with st.expander('📋 Lumibricks – alle Preise testen und gesammelt freigeben', expanded=False):
+        st.caption('Prüft alle aktiven, verknüpften Lumibricks-Artikel mit DE-Lieferland im Browser. '
+                   'Die Europreise sind aus USD berechnet, keine direkt bestätigten Shoppreise. '
+                   'Die Vorschau wird in PostgreSQL zwischengespeichert; die Preishistorie erst nach einer einmaligen Sammelfreigabe aktualisiert.')
+        factor_input=st.number_input('Vorläufiger USD→EUR-Faktor',min_value=0.1,max_value=1.5,value=0.892,step=0.001,format='%.3f',key='lumi_bulk_factor')
+        st.warning('Der Faktor 0,892 ist aus neun beobachteten Preisbeispielen abgeleitet. '
+                   'Vor der Freigabe bitte Stichproben mit Lumibricks vergleichen. '
+                   'Bei einer Kursänderung muss ein neuer Testlauf erfolgen.')
+        bulk_rows=[r for _,r in active.iterrows() if lumibricks_store.valid_url(str(r.lumibricks_url).strip())
+                   and str(r.db_id).strip().isdigit()]
+        st.write(f'Für den Testlauf vorgesehen: **{len(bulk_rows)} aktive verknüpfte Artikel**.')
+        if st.button('🌍 Alle Lumibricks-Preise als Vorschau prüfen',key='lumi_bulk_start',disabled=not bool(bulk_rows)):
+            try:
+                bid=lumibricks_store.new_bulk_preview(DB_URL,str(factor_input))
+                progress=st.progress(0)
+                status=st.empty()
+                entries=[]
+                interrupted=False
+                for ix,r in enumerate(bulk_rows):
+                    sku=str(r.sku)
+                    status.write(f'Prüfe {ix+1}/{len(bulk_rows)}: {sku}')
+                    entry={'product_id':str(r.db_id),'sku':sku,'title':str(r.description)[:180],
+                           'url':lumibricks_store.canonical(str(r.lumibricks_url)),'factor':str(factor_input)}
+                    try:
+                        result=lumibricks_store.preview_de_market_usd_to_eur(str(r.lumibricks_url),factor=str(factor_input))
+                        if not str(result['sku']).upper().endswith('#DE'):
+                            raise ValueError('DE-Variante nicht bestätigt')
+                        if not result.get('changed'):
+                            raise ValueError('Marktwechsel nicht nachgewiesen: Preis vor/nach DE-Auswahl identisch')
+                        entry.update(status='ok',usd=str(result['usd']),eur=str(result['eur_estimate']),
+                                     variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
+                                     before_usd=str(result['before_usd']),note='EUR aus USD berechnet')
+                    except Exception as exc:
+                        entry.update(status='error',error=str(exc)[:450])
+                        if '429' in str(exc): interrupted=True
+                    entries.append(entry)
+                    lumibricks_store.save_bulk_preview(DB_URL,bid,entries,state='interrupted' if interrupted else 'running')
+                    progress.progress((ix+1)/len(bulk_rows))
+                    if interrupted:
+                        st.warning('HTTP 429: Testlauf gestoppt; bisherige Ergebnisse bleiben als unterbrochene Vorschau erhalten.')
+                        break
+                    if ix+1<len(bulk_rows): time.sleep(2)
+                if not interrupted:
+                    lumibricks_store.save_bulk_preview(DB_URL,bid,entries,state='ready')
+                status.empty()
+                st.success(f'Vorschau gespeichert: {sum(e["status"]=="ok" for e in entries)} Preise ermittelt, '
+                           f'{sum(e["status"]!="ok" for e in entries)} Fehler. Keine Preise übernommen.')
+            except Exception as exc:
+                st.error('Testlauf konnte nicht abgeschlossen werden: '+str(exc))
+        try:
+            batch=lumibricks_store.latest_bulk_preview(DB_URL)
+        except Exception as exc:
+            batch=None
+            st.error('Vorschau-Datenbank nicht verfügbar (CREATE TABLE-Berechtigung prüfen): '+str(exc))
+        if batch:
+            entries=batch.get('entries') or []
+            valid=[e for e in entries if e.get('status')=='ok']
+            bad=[e for e in entries if e.get('status')!='ok']
+            state=batch['state']
+            st.write(f'**Letzte Vorschau:** {batch["created_at"].astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")} '
+                     f'· Status: {state} · Faktor: {batch["factor"]} · '
+                     f'{len(valid)} gültige Preise · {len(bad)} Fehler')
+            view_rows=[]
+            for e in entries:
+                view_rows.append({'Artikel':e.get('sku',''),'Bezeichnung':e.get('title',''),
+                                  'DE-SKU':e.get('variant_sku',''),'Varianten-ID':e.get('variant_id',''),
+                                  'USD DE-Markt':e.get('usd',''),'EUR berechnet':e.get('eur',''),
+                                  'Faktor':e.get('factor',''),'Status':'Berechnet' if e.get('status')=='ok' else 'Fehler',
+                                  'Hinweis':e.get('error') or e.get('note','')})
+            if view_rows:
+                table=pd.DataFrame(view_rows)
+                st.dataframe(table,use_container_width=True,hide_index=True)
+                st.download_button('⬇️ Preisvorschau als CSV exportieren',
+                                   data=table.to_csv(index=False,sep=';').encode('utf-8-sig'),
+                                   file_name=f'lumibricks_preisvorschau_{batch["id"]}.csv',mime='text/csv',key='lumi_bulk_csv')
+            if state=='interrupted':
+                st.warning('Der Testlauf wurde unterbrochen. Bitte für eine Freigabe den vollständigen Testlauf erneut ausführen.')
+            elif state=='running':
+                st.info('Ein Testlauf ist noch in Bearbeitung oder wurde vorzeitig unterbrochen. Keine Freigabe möglich.')
+            elif state=='approved':
+                st.success('Diese Vorschau wurde bereits gesammelt freigegeben. Eine erneute Übernahme ist gesperrt.')
+            elif state=='ready' and valid:
+                st.warning(f'Freigabe würde **{len(valid)} berechnete EUR-Preise** in current_prices übernehmen '
+                           'und Änderungen in price_history dokumentieren. '
+                           f'{len(bad)} fehlgeschlagene Artikel werden ausgeschlossen. '                           'Die angezeigten EUR-Beträge sind Näherungen und keine verifizierten EUR-Shoppreise.')
+                agree=st.checkbox('Ich habe die Vorschau geprüft und möchte alle erfolgreich berechneten Preise gesammelt speichern.',
+                                  key='lumi_bulk_approval_checkbox')
+                if st.button(f'✅ {len(valid)} Preise einmalig gesammelt freigeben',
+                             key='lumi_bulk_approve',disabled=not agree,type='primary'):
+                    try:
+                        outcome=lumibricks_store.approve_bulk_preview(DB_URL,str(batch['id']))
+                        if outcome['already']:
+                            st.info('Diese Vorschau ist bereits freigegeben; keine erneute Speicherung.')
+                        else:
+                            st.success(f"{outcome['approved']} Preise übernommen; {outcome['history']} neue Preisverlauf-Einträge.")
+                            st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
+                        st.rerun()
+                    except Exception as exc:
+                        st.error('Sammelfreigabe abgebrochen (keine Teilübernahme): '+str(exc))
+
     with st.expander('🧪 Lumibricks Varianten-/USD→EUR-Test (ohne Speicherung)', expanded=False):
         st.caption('Wählt eine eindeutig nachgewiesene DE-Variante statt des Standardartikels. '
                    'Der Faktor 0,892 ist vorläufig. Ergebnisse sind Schätzungen, keine '

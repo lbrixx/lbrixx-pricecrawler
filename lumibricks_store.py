@@ -831,3 +831,88 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                             localization_http=status,url=clean,status='TEST / NICHT GESPEICHERT')
             finally: context.close()
         finally: browser.close()
+
+
+# V28.11.62: Persistente Preisvorschau und transaktionale Sammelfreigabe.
+# USD→EUR wird ausschließlich als berechneter Wert gespeichert, niemals als direkter EUR-Shoppreis bezeichnet.
+import uuid as _uuid
+
+def ensure_bulk_preview_table(db_url):
+    with connect(db_url) as c, c.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS public.lumibricks_bulk_previews (
+            id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now(),
+            state text NOT NULL CHECK(state IN ('running','ready','approved','interrupted')),
+            factor numeric(12,6) NOT NULL,
+            entries jsonb NOT NULL DEFAULT '[]'::jsonb,
+            approved_at timestamptz
+        )""")
+
+def new_bulk_preview(db_url,factor):
+    ensure_bulk_preview_table(db_url)
+    bid=str(_uuid.uuid4())
+    with connect(db_url) as c,c.cursor() as cur:
+        cur.execute("INSERT INTO public.lumibricks_bulk_previews(id,state,factor) VALUES(%s,'running',%s)",(bid,str(factor)))
+    return bid
+
+def save_bulk_preview(db_url,bid,entries,state='running'):
+    if state not in ('running','ready','interrupted'): raise ValueError('Ungültiger Vorschauzustand')
+    with connect(db_url) as c,c.cursor() as cur:
+        cur.execute("UPDATE public.lumibricks_bulk_previews SET entries=%s::jsonb,state=%s,updated_at=now() WHERE id=%s AND state IN ('running','ready','interrupted')",
+                    (json.dumps(entries,ensure_ascii=False),state,bid))
+        if cur.rowcount!=1: raise ValueError('Vorschau ist bereits freigegeben oder nicht mehr vorhanden')
+
+def latest_bulk_preview(db_url):
+    ensure_bulk_preview_table(db_url)
+    with connect(db_url) as c,c.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT id,created_at,updated_at,state,factor,entries,approved_at FROM public.lumibricks_bulk_previews ORDER BY created_at DESC LIMIT 1")
+        r=cur.fetchone()
+        return dict(r) if r else None
+
+def approve_bulk_preview(db_url,bid):
+    """One explicit approval, all-or-nothing transaction, no duplicate history on repeated requests."""
+    with connect(db_url) as c,c.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT * FROM public.lumibricks_bulk_previews WHERE id=%s FOR UPDATE",(bid,))
+        batch=cur.fetchone()
+        if not batch: raise ValueError('Preisvorschau nicht gefunden')
+        if batch['state']=='approved': return {'already':True,'approved':0,'history':0}
+        if batch['state']!='ready': raise ValueError('Nur vollständig abgeschlossene Vorschauen dürfen freigegeben werden')
+        entries=batch['entries']
+        successes=[e for e in entries if e.get('status')=='ok']
+        if not successes: raise ValueError('Keine gültigen Preise zur Freigabe')
+        if len({int(e['product_id']) for e in successes})!=len(successes):
+            raise ValueError('Doppelte Artikel in Vorschau; bitte erneut prüfen')
+        mid=ensure_merchant(db_url)
+        # Check each offer still exists, matches the preview, and is active, before changing anything.
+        targets=[]
+        for e in successes:
+            cur.execute("""SELECT o.id,o.product_url,p.is_deleted FROM public.offers o
+               JOIN public.products p ON p.id=o.product_id
+               WHERE o.product_id=%s AND o.merchant_id=%s AND o.is_active=true FOR UPDATE OF o""",
+               (int(e['product_id']),mid))
+            offer=cur.fetchone()
+            if not offer or offer['is_deleted'] or canonical(offer['product_url'])!=e['url']:
+                raise ValueError(f"Artikel {e['sku']}: Zuordnung seit der Vorschau geändert. Bitte neu prüfen.")
+            if Decimal(str(e['factor']))!=Decimal(str(batch['factor'])):
+                raise ValueError('Abweichender Umrechnungsfaktor in Vorschau')
+            if Decimal(str(e['eur'])) != (Decimal(str(e['usd']))*Decimal(str(batch['factor']))).quantize(Decimal('1'),rounding=ROUND_HALF_UP):
+                raise ValueError('Inkonsistente Preisberechnung in Vorschau')
+            if not str(e.get('variant_sku','')).upper().endswith('#DE'):
+                raise ValueError(f"Artikel {e['sku']}: Keine bestätigte DE-Variante")
+            targets.append((offer['id'],e))
+        now=datetime.now(timezone.utc)
+        history=0
+        for oid,e in targets:
+            price=Decimal(str(e['eur']))
+            cur.execute('SELECT price,shipping_cost FROM public.current_prices WHERE offer_id=%s FOR UPDATE',(oid,))
+            prev=cur.fetchone()
+            cur.execute("""INSERT INTO public.current_prices(offer_id,price,shipping_cost,availability,fetch_status,last_success_at,last_attempt_at,error_message)
+                VALUES(%s,%s,0,'available','success',%s,%s,NULL)
+                ON CONFLICT(offer_id) DO UPDATE SET price=excluded.price,shipping_cost=0,availability='available',
+                    fetch_status='success',last_success_at=excluded.last_success_at,last_attempt_at=excluded.last_attempt_at,error_message=NULL""",
+                (oid,price,now,now))
+            if not prev or prev['price']!=price or prev['shipping_cost']!=0:
+                cur.execute("INSERT INTO public.price_history(offer_id,price,shipping_cost,availability,recorded_at) VALUES(%s,%s,0,'available',%s)",(oid,price,now))
+                history+=1
+        cur.execute("UPDATE public.lumibricks_bulk_previews SET state='approved',approved_at=%s,updated_at=%s WHERE id=%s",(now,now,bid))
+    return {'already':False,'approved':len(targets),'history':history}

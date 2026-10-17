@@ -1,0 +1,22 @@
+LBrixx Price-Crawler V28.11.62 – Lumibricks-Sammelpreislauf
+
+1. app.py und lumibricks_store.py aus dieser ZIP in GitHub ersetzen.
+2. Bestehende Playwright-/Chromium-Konfiguration unverändert beibehalten.
+3. Streamlit neu starten.
+4. Unter Artikelübersicht „Lumibricks – alle Preise testen und gesammelt freigeben“ öffnen.
+5. „Alle Lumibricks-Preise als Vorschau prüfen“ klicken.
+6. Vorschau/Fehler kontrollieren oder CSV exportieren.
+7. Wenn alles passt, Checkbox aktivieren und einmalig alle gültigen Preise freigeben.
+
+Die Tabelle public.lumibricks_bulk_previews wird beim ersten Aufruf automatisch
+angelegt, soweit die Datenbankrolle CREATE-Rechte auf public besitzt.
+Bis zur Freigabe werden KEINE aktuellen Preise und KEINE Preisverläufe verändert.
+Nach Freigabe werden nur bestätigte Vorschauzeilen übernommen; fehlgeschlagene
+Prüfungen bleiben ausgeschlossen. Doppelte Freigaben sind gesperrt.
+
+Wichtig: Europreise sind Schätzungen aus DE-Markt-USD-Preisen × 0,892 (Rundung
+auf ganze Euro), keine unmittelbar von Lumibricks bestätigten EUR-Verkaufspreise.
+Der verwendete Faktor ist in der Vorschau einstellbar; Änderungen erfordern
+einen neuen Testlauf. Es gibt mindestens zwei Sekunden Pause zwischen Artikeln.
+Bei HTTP 429 stoppt die Suche; bis dahin gespeicherte Vorschau bleibt sichtbar,
+ist aber nicht zur Freigabe zugelassen.
