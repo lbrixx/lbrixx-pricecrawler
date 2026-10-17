@@ -1,0 +1,15 @@
+LBrixx Price-Crawler V28.11.71 – Ein einheitliches Lumibricks-Pruefzentrum
+
+Installation: app.py und lumibricks_store.py auf GitHub ersetzen, Streamlit neu starten.
+Keine Datenbankmigration erforderlich.
+
+Preispruefung:
+- Gesamte Lumibricks-Vorschau: gemeinsamer DE-Markt-Abruf.
+- Einen Artikel aus der offenen Vorschau nachpruefen: derselbe Abruf.
+- Artikelzeilen-Symbol: fuer Lumibricks derselbe Abruf in die offene Vorschau;
+  Brickmo/Lootstore bleiben bei ihrer bisherigen direkten Aktualisierung.
+- Technische Diagnose: derselbe Abruf ohne Speicherung; rohe Endpunkte
+  sind deutlich als andere Kontexte und nicht als Shopverkaufspreise markiert.
+- Sammelfreigabe bleibt separat. Preishistorie wird nicht durch Tests geaendert.
+
+Achtung: Nicht live mit Lumibricks oder Supabase getestet.

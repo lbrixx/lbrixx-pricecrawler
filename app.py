@@ -72,6 +72,44 @@ def fmt(x):
     n=euro_num(x)
     return f'{n:,.2f} €'.replace(',','X').replace('.',',').replace('X','.') if n is not None else '–'
 
+def lumibricks_preview_entry(row, factor):
+    """Single authoritative DE-market / promotion / availability evaluation.
+
+    Shared by full preview, selected-product preview and article-row refresh.
+    Never writes directly to current_prices or price_history.
+    """
+    shop_url=str(row.lumibricks_url).strip()
+    entry={'product_id':str(row.db_id).strip(),'sku':str(row.sku),
+           'title':str(row.description)[:180],
+           'url':lumibricks_store.canonical(shop_url),'factor':str(factor),
+           'preview_revision':5,'variant_sku':'','variant_id':'',
+           'regular_usd':'','sale_usd':'','promotion_evidence':'',
+           'available':None,'status':'error'}
+    try:
+        result=lumibricks_store.preview_de_market_usd_to_eur(shop_url,factor=str(factor))
+        entry.update(variant_sku=str(result.get('sku') or ''),
+                     variant_id=str(result.get('variant_id') or ''),
+                     available=result.get('available'),
+                     regular_usd=str(result.get('regular_usd') or ''),
+                     sale_usd=str(result.get('sale_usd') or ''),
+                     promotion_evidence=str(result.get('promotion_evidence') or ''),
+                     before_usd=str(result.get('before_usd') or ''))
+        if not entry['variant_sku'].upper().endswith('#DE'):
+            raise ValueError('DE-Variante nicht bestätigt')
+        if result.get('price_review') and result.get('available') is True:
+            raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
+        if result.get('usd') is None or result.get('eur_estimate') is None:
+            raise ValueError('Für die DE-Variante kein eindeutiger Preis ermittelt')
+        available=result.get('available') is True
+        entry.update(status='ok' if available else 'unavailable',
+                     available=available,usd=str(result['usd']),
+                     eur=str(result['eur_estimate']),
+                     note=('Nicht lieferbar – Shopify-Preis nur zur Information' if not available
+                           else 'Berechneter EUR-Preis aus DE-Markt-USD; '+entry['promotion_evidence']))
+    except Exception as exc:
+        entry.update(status='error',error=str(exc)[:450])
+    return entry
+
 def brickmo_match_keys(product):
     """Primary Odoo SKU plus explicit parenthesized manufacturer codes in description.
 
@@ -255,7 +293,7 @@ header_logo, header_title = st.columns([1, 5], vertical_alignment='center')
 with header_logo:
     st.image('lbrixx_logo.png', use_container_width=True)
 with header_title:
-    st.markdown('### Preisvergleich V28.11.63 · PostgreSQL')
+    st.markdown('### Preisvergleich V28.11.71 · PostgreSQL')
     st.caption('🗄️ PostgreSQL verbunden · Supabase')
 # Odoo 19 JSON-2 API: credentials are read only from Streamlit Secrets.
 ODOO_URL=str(secrets('ODOO_URL','')).rstrip('/')
@@ -1338,7 +1376,7 @@ else:
         chosen=photo if photo.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else fallback
         img=f'<img src="{cell(chosen)}" alt="Produktfoto" loading="lazy">' if chosen.startswith(('data:image/jpeg;base64,','data:image/png;base64,','https://')) else '–'
         rows.append('<tr>' +
-            f'<td class="edit"><div class="action-group"><a title="Alle verknüpften Shoppreise dieses Artikels prüfen" aria-label="Einzelpreisprüfung aller Shops" href="?price_row={row_idx}" target="_self">🔄</a> <a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
+            f'<td class="edit"><div class="action-group"><a title="Alle Shops prüfen; Lumibricks schreibt nur in die Preisvorschau" aria-label="Einzelpreisprüfung aller Shops" href="?price_row={row_idx}" target="_self">🔄</a> <a title="Bearbeiten" aria-label="Bearbeiten" href="?edit={row_idx}" target="_self">✏️</a> <a title="{"Einblenden" if checked_status(r.hidden) else "Ausblenden"}" aria-label="Sichtbarkeit ändern" href="?toggle_hidden={row_idx}" target="_self">{"👁️" if checked_status(r.hidden) else "🚫"}</a> <a title="{"Wiederherstellen" if checked_status(r.deleted) else "Löschen"}" aria-label="Löschen oder wiederherstellen" href="?delete={row_idx}" target="_self">{"↩️" if checked_status(r.deleted) else "🗑️"}</a></div></td>' +
             f'<td class="photo">{img}</td>' +
             f'<td>{cell(r.sku)}</td>' +
             f'<td>{cell(r.brand_name)}</td>' +
@@ -1454,7 +1492,9 @@ else:
             for detail in report['details']:
                 st.write(detail)
     active=df.loc[~deleted_mask & ~hidden_mask]
-    with st.expander('📋 Lumibricks – alle Preise testen und gesammelt freigeben', expanded=False):
+    with st.expander('💶 Lumibricks-Preisprüfung · Vorschau und Sammelfreigabe', expanded=True):
+        st.markdown('**Prüfablauf:** Einzelartikel oder Gesamtbestand → dieselbe Deutschland-Markt-Preisprüfung → Vorschau kontrollieren → Sammelfreigabe.\n\n**Aktualisierungssymbole in der Artikelzeile:** Brickmo/Lootstore werden direkt gespeichert; Lumibricks nur in der offenen Vorschau geprüft.')
+        st.markdown('**Ein Verfahren für alle Prüfungen:** Deutschland auswählen → DE-Variante → regulären/ermäßigten Hauptpreis prüfen → EUR berechnen → Vorschau.\n\n**Keine Preisprüfung speichert unmittelbar einen Lumibricks-Preis.** Erst die gesonderte Sammelfreigabe schreibt in die Preishistorie.')
         st.caption('Prüft alle aktiven, verknüpften Lumibricks-Artikel mit DE-Lieferland im Browser. '
                    'Die Europreise sind aus USD berechnet, keine direkt bestätigten Shoppreise. '
                    'Die Vorschau wird in PostgreSQL zwischengespeichert; die Preishistorie erst nach einer einmaligen Sammelfreigabe aktualisiert.')
@@ -1465,7 +1505,7 @@ else:
         bulk_rows=[r for _,r in active.iterrows() if lumibricks_store.valid_url(str(r.lumibricks_url).strip())
                    and str(r.db_id).strip().isdigit()]
         st.write(f'Für den Testlauf vorgesehen: **{len(bulk_rows)} aktive verknüpfte Artikel**.')
-        if st.button('🌍 Alle Lumibricks-Preise als Vorschau prüfen',key='lumi_bulk_start',disabled=not bool(bulk_rows)):
+        if st.button('🌍 Gesamten Lumibricks-Bestand prüfen (neue Vorschau)',key='lumi_bulk_start',disabled=not bool(bulk_rows)):
             try:
                 bid=lumibricks_store.new_bulk_preview(DB_URL,str(factor_input))
                 progress=st.progress(0)
@@ -1475,37 +1515,9 @@ else:
                 for ix,r in enumerate(bulk_rows):
                     sku=str(r.sku)
                     status.write(f'Prüfe {ix+1}/{len(bulk_rows)}: {sku}')
-                    entry={'product_id':str(r.db_id),'sku':sku,'title':str(r.description)[:180],
-                           'url':lumibricks_store.canonical(str(r.lumibricks_url)),'factor':str(factor_input)}
-                    try:
-                        result=lumibricks_store.preview_de_market_usd_to_eur(str(r.lumibricks_url),factor=str(factor_input))
-                        # Preserve the DE variant information even if a price
-                        # is rejected, so errors do not appear as missing SKUs.
-                        entry.update(variant_sku=str(result.get('sku') or ''),
-                                     variant_id=str(result.get('variant_id') or ''),
-                                     available=result.get('available'),
-                                     regular_usd=str(result.get('regular_usd') or ''),
-                                     sale_usd=str(result.get('sale_usd') or ''),
-                                     promotion_evidence=str(result.get('promotion_evidence') or ''))
-                        if not str(result['sku']).upper().endswith('#DE'):
-                            raise ValueError('DE-Variante nicht bestätigt')
-                        if result.get('available') is True and result.get('price_review'):
-                            raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
-                        # Equal before/after prices are valid: some products cost the same in both markets.
-                        # Localization HTTP success and the confirmed #DE variant are checked in the scraper.
-                        is_available=result.get('available') is True
-                        entry.update(status='ok' if is_available else 'unavailable',
-                                     usd=str(result['usd']),eur=str(result['eur_estimate']),
-                                     variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
-                                     preview_revision=5,available=is_available,sale_usd=str(result.get('sale_usd') or ''),
-                                     regular_usd=str(result.get('regular_usd') or ''),
-                                     before_usd=str(result['before_usd']),
-                                     note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence')) if is_available and result.get('promotion_evidence')
-                                           else 'Nicht lieferbar – Shopify-Variantenpreis zur Information, kein kaufbares Angebot' if not is_available
-                                           else 'EUR aus USD berechnet'))
-                    except Exception as exc:
-                        entry.update(status='error',error=str(exc)[:450],note=str(entry.get('note') or ''))
-                        if '429' in str(exc): interrupted=True
+                    entry=lumibricks_preview_entry(r,factor_input)
+                    if '429' in str(entry.get('error') or ''):
+                        interrupted=True
                     entries.append(entry)
                     lumibricks_store.save_bulk_preview(DB_URL,bid,entries,state='interrupted' if interrupted else 'running')
                     progress.progress((ix+1)/len(bulk_rows))
@@ -1535,7 +1547,28 @@ else:
             st.write(f'**Letzte Vorschau:** {batch["created_at"].astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")} '
                      f'· Status: {state} · Faktor: {batch["factor"]} · '
                      f'{len(valid)} lieferbar · {len(unavailable)} nicht lieferbar (mit Preis) · {len(bad)} Fehler')
-            st.caption('Einzelne Artikel über 🔄 in der jeweiligen Artikelzeile neu prüfen; die übrige Vorschau bleibt erhalten.')
+            st.caption('Einzelne Artikel entweder hier oder über 🔄 in der Artikelzeile nachprüfen. Beide Wege verwenden exakt dieselbe Prüflogik und denselben Kurs aus dieser Vorschau.')
+            # Clear and explicit single-item test without running the whole catalog.
+            options={f"{e.get('sku','?')} · {e.get('title','')[:65]}":str(e.get('product_id','')) for e in entries}
+            if state in ('ready','interrupted') and options:
+                st.markdown('**Nur einen Artikel aus dieser Vorschau nachprüfen**')
+                choice=st.selectbox('Artikel auswählen',list(options),key='lumi_preview_choice')
+                if st.button('🔄 Ausgewählten Lumibricks-Artikel prüfen (nur Vorschau)',key='lumi_preview_single'):
+                    prod_id=options[choice]
+                    matches=[r for _,r in active.iterrows() if str(r.db_id).strip()==prod_id]
+                    if len(matches)!=1:
+                        st.error('Artikel ist nicht mehr eindeutig im aktiven Odoo-Bestand vorhanden. Bitte Zuordnung prüfen.')
+                    else:
+                        with st.spinner('Einheitliche DE-Markt-Prüfung läuft …'):
+                            entry=lumibricks_preview_entry(matches[0],batch['factor'])
+                            lumibricks_store.replace_single_bulk_preview_entry(DB_URL,str(batch['id']),prod_id,entry)
+                        st.session_state['lumi_preview_last_test']=entry
+                        st.rerun()
+            last_test=st.session_state.get('lumi_preview_last_test')
+            if last_test and any(str(e.get('product_id'))==str(last_test.get('product_id')) for e in entries):
+                st.info('Letzte Einzelprüfung: '+str(last_test.get('sku'))+' · '
+                        +('Fehler: '+str(last_test.get('error')) if last_test.get('status')=='error'
+                          else str(last_test.get('eur'))+' € (berechnet) · '+('lieferbar' if last_test.get('available') else 'nicht lieferbar')))
             view_rows=[]
             for e in entries:
                 view_rows.append({'Artikel':e.get('sku',''),'Bezeichnung':e.get('title',''),
@@ -1578,8 +1611,8 @@ else:
                     except Exception as exc:
                         st.error('Sammelfreigabe abgebrochen (keine Teilübernahme): '+str(exc))
 
-    with st.expander('🔬 Erweiterte Lumibricks-Diagnose', expanded=False):
-        st.caption('Nur technische Diagnose: Alle Preisprüfungen mit Deutschland-Markt. '
+    with st.expander('🛠️ Technische Lumibricks-Diagnose (nur bei Problemen)', expanded=False):
+        st.caption('Der erste Test verwendet exakt dieselbe Preisregel wie Einzel- und Gesamtlauf. Rohe Shopify-Endpunkte darunter zeigen bewusst andere Marktkontexte und sind KEINE Verkaufspreise. '
                    'Keine direkte Speicherung in der Preishistorie. '
                    'Für reguläre Preisprüfungen bitte das 🔄-Symbol der Artikelzeile verwenden.')
         diagnostic_choices={f'{r.sku or r.odoo_id} · {str(r.description)[:65]}':int(i) for i,r in active.iterrows() if lumibricks_store.valid_url(str(r.lumibricks_url).strip())}
@@ -1597,279 +1630,138 @@ else:
 
         st.divider()
         st.markdown('**🌍 DE-Markt-Variantenpreis testen (ohne Speicherung)**')
-        st.caption('Chromium wählt Deutschland und liest anschließend die Shopify-Variante. '
-                   'EUR ist eine Schätzung mit Faktor 0,892; es wird nichts gespeichert.')
-        if st.button('🌍 Deutschland-Preisvorschau starten',key='lumi_de_price_preview'):
+        st.caption('Gleiche Produkt-, DE-Markt- und Aktionspreisprüfung wie in der Sammelvorschau. Keine Speicherung. Der Faktor wird aus der Vorschau übernommen, sonst 0,892 verwendet.')
+        if st.button('🔬 Gleiche DE-Markt-Prüfung ohne Speicherung ausführen',key='lumi_de_price_preview'):
             if chosen=='Bitte Artikel wählen':
                 st.warning('Bitte einen Artikel auswählen.')
             elif not lumibricks_store.valid_url(preview_url_input.strip()):
                 st.warning('Bitte einen gültigen Lumibricks-Link angeben.')
             else:
-                try:
-                    with st.spinner('Prüfe Shopify-Variantenpreis nach DE-Auswahl …'):
-                        result=lumibricks_store.preview_de_market_usd_to_eur(preview_url_input.strip())
-                    st.warning(f"NUR TEST / NICHT GESPEICHERT – {result['usd']} USD × {result['factor']} → ungefähr {result['eur_estimate']} EUR")
-                    st.write(f"SKU: {result['sku']} · ID: {result['variant_id']} · Varianten: {result['variant_count']}")
-                    st.write(f"Vor DE-Auswahl: {result['before_usd']} USD · Nach DE-Auswahl: {result['usd']} USD · HTTP: {result['localization_http']}")
-                    st.caption('Auswahl: '+result['selection_reason']+'; Warenkorb-Währung: '+result['currency'])
-                    if not result['changed']:
-                        st.info('Die DE-Auswahl hat den Variantenpreis nicht verändert; Marktbestätigung bleibt unklar.')
-                except Exception as exc:
-                    st.error(f'DE-Marktpreis-Vorschau fehlgeschlagen: {exc}')
-
-        # Read-only price-source diagnosis (V28.11.59). This button deliberately
-        # has no connection to the persistence functions or price history.
-        st.divider()
-        st.markdown('**🔬 Shopify-Preisquellen vergleichen (ohne Speicherung)**')
-        st.caption('Vergleicht dieselben Shopify-Varianten aus /de/products/…js und '
-                   '/products/…js. Abrufzeit in Berlin (MEZ/MESZ). '
-                   'Die Shopify-Warenkorbwährung gilt als Kontext, nicht als Beweis '
-                   'für einen EUR-Verkaufspreis.')
-        source_button=st.button('🔬 Beide Shopify-Preisquellen jetzt prüfen',
-                                key='lumi_price_source_diagnosis')
-        diagnosis_key=f'lumi_price_source_report_{chosen}'
-        if source_button:
-            if chosen == 'Bitte Artikel wählen':
-                st.warning('Bitte zuerst einen Artikel auswählen.')
-            elif not lumibricks_store.valid_url(preview_url_input.strip()):
-                st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
-            else:
-                try:
-                    with st.spinner('Lese beide Shopify-Produktendpunkte …'):
-                        source_reports=lumibricks_store.diagnose_variant_price_sources(
-                            preview_url_input.strip())
-                    st.session_state[diagnosis_key]={
-                        'url':preview_url_input.strip(),
-                        'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
-                        'reports':source_reports,
-                    }
-                except Exception as exc:
-                    st.error(f'Shopify-Preisquellen-Diagnose fehlgeschlagen: {exc}')
-        source_diagnosis=st.session_state.get(diagnosis_key)
-        if source_diagnosis:
-            st.caption('Letzter Vergleich: '+source_diagnosis['time']+' · '+source_diagnosis['url'])
-            rows=[]
-            for source_report in source_diagnosis['reports']:
-                path=urlparse(source_report['source']).path
-                variants=source_report.get('variants') or []
-                if not variants:
-                    rows.append({
-                        'Quelle':path,'HTTP':source_report.get('http'),
-                        'Varianten-ID':'–','SKU':'–','Region':'–',
-                        'USD-Preis (laut JSON)':'–','Verfügbar':'–',
-                        'Shopify-Warenkorb':source_report.get('content_currency'),
-                        'Meldung':source_report.get('error') or 'Keine Varianten zurückgegeben',
-                    })
-                for variant in variants:
-                    rows.append({
-                        'Quelle':path,'HTTP':source_report.get('http'),
-                        'Varianten-ID':variant.get('variant_id',''),
-                        'SKU':variant.get('sku',''),
-                        'Region':variant.get('title',''),
-                        'USD-Preis (laut JSON)':variant.get('amount',''),
-                        'Verfügbar':variant.get('available'),
-                        'Shopify-Warenkorb':source_report.get('content_currency'),
-                        'Meldung':source_report.get('error',''),
-                    })
-            if rows:
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-            for source_report in source_diagnosis['reports']:
-                label=urlparse(source_report['source']).path
-                st.caption(f"{label} · HTTP {source_report.get('http')} · "
-                           f"Serverdatum: {source_report.get('date') or 'nicht angegeben'} · "
-                           f"Cache: {source_report.get('cache') or 'nicht angegeben'} · "
-                           f"Antwort-Hash: {source_report.get('sha256') or '–'}")
-            first, second=(source_diagnosis['reports']+[{},{}])[:2]
-            v1={v['variant_id']:v for v in first.get('variants',[])}
-            v2={v['variant_id']:v for v in second.get('variants',[])}
-            shared=sorted(set(v1)&set(v2))
-            differing=[ident for ident in shared
-                       if v1[ident].get('raw_cents') != v2[ident].get('raw_cents')]
-            if differing:
-                st.warning('Unterschiedliche Preise für identische Varianten-IDs: '
-                           +', '.join(differing))
-            elif shared:
-                st.success(f'{len(shared)} gemeinsame Varianten-IDs: Beide Endpunkte liefern '
-                           'für diese Varianten dieselben Preiswerte.')
-            else:
-                st.info('Keine gemeinsamen Varianten-IDs nachweisbar; Endpunkte und Fehler prüfen.')
-            st.caption('Nur Diagnose – keine Umrechnung und keine Speicherung in PostgreSQL.')
-
-        # V28.11.60 – independent read-only session/market comparison.
-        st.divider()
-        st.markdown('**🌍 Lumibricks-Markt- und Sitzungsdiagnose (ohne Speicherung)**')
-        st.caption('Vergleicht dieselbe Shopify-DE-Variante in drei getrennten Sitzungen. '
-                   'Zeigt nur Cookie-Namen, niemals Cookie-Inhalte. '
-                   'Die Warenkorb-Währung ist kein Nachweis für einen EUR-Verkaufspreis.')
-        market_key=f'lumi_market_diag_{chosen}'
-        if st.button('🌍 Markt- und Sitzungsdaten jetzt vergleichen',
-                     key='lumi_market_diagnosis'):
-            if chosen == 'Bitte Artikel wählen':
-                st.warning('Bitte zuerst einen Artikel auswählen.')
-            elif not lumibricks_store.valid_url(preview_url_input.strip()):
-                st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
-            else:
-                try:
-                    with st.spinner('Prüfe HTTP- und Browser-Sitzungen …'):
-                        market_rows=lumibricks_store.diagnose_market_sessions(preview_url_input.strip())
-                    st.session_state[market_key]={
-                        'url':preview_url_input.strip(),
-                        'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
-                        'rows':market_rows,
-                    }
-                except Exception as exc:
-                    st.error(f'Markt-Diagnose fehlgeschlagen: {exc}')
-        market_report=st.session_state.get(market_key)
-        if market_report:
-            st.caption('Letzte Prüfung: '+market_report['time']+' · '+market_report['url'])
-            st.dataframe(pd.DataFrame(market_report['rows']),
-                         hide_index=True, use_container_width=True)
-            st.caption('Nur Diagnose: Keine Preisumrechnung, keine Änderung in PostgreSQL. '
-                       'Cookie-Werte, Sitzungs-IDs und Zugangsdaten werden nicht angezeigt.')
-
-
-    if row_refresh_index is not None:
-        # Different providers persist via their existing, proven pathways.
-        r=df.loc[row_refresh_index]
-        report={'sku':str(r.sku),'ok':0,'failed':0,'skipped':0,'details':[]}
-        updated=df.copy()
-        changed_indices=[]
-        for shop in ('brickmo','lootstore','lumibricks'):
-            field={'brickmo':'brickmo_url','lootstore':'lootstore_url','lumibricks':'lumibricks_url'}[shop]
-            shop_url=str(r[field]).strip()
-            valid_link=(lumibricks_store.valid_url(shop_url) if shop=='lumibricks'
-                        else valid_url(shop_url) if shop=='brickmo' else valid_lootstore_url(shop_url))
-            if not valid_link:
-                report['skipped']+=1
-                report['details'].append(f'{shop.capitalize()}: Übersprungen (kein gültiger Produktlink)')
-                continue
-            try:
-                if shop=='lumibricks':
-                    product_id=str(r.db_id).strip()
-                    if not product_id or not product_id.isdigit():
-                        raise ValueError('Datenbank-ID des Artikels fehlt')
-                    batch=lumibricks_store.latest_bulk_preview(DB_URL)
-                    if not batch or batch.get('state') not in ('ready','interrupted'):
-                        report['skipped']+=1
-                        report['details'].append('Lumibricks: Keine offene abgeschlossene Sammelvorschau. Zuerst einmalig eine Lumibricks-Gesamtvorschau starten.')
-                        continue
-                    entries=batch.get('entries') or []
-                    if sum(str(e.get('product_id'))==product_id for e in entries)!=1:
-                        report['skipped']+=1
-                        report['details'].append('Lumibricks: Artikel fehlt in der bestehenden Vorschau; keine automatische Übernahme.')
-                        continue
-                    entry={'product_id':product_id,'sku':str(r.sku),'title':str(r.description)[:180],
-                           'url':lumibricks_store.canonical(shop_url),'factor':str(batch['factor'])}
-                    try:
-                        result=lumibricks_store.preview_de_market_usd_to_eur(shop_url,factor=str(batch['factor']))
-                        entry.update(variant_sku=str(result.get('sku') or ''),variant_id=str(result.get('variant_id') or ''),
-                                     available=result.get('available'),regular_usd=str(result.get('regular_usd') or ''),
-                                     sale_usd=str(result.get('sale_usd') or ''),
-                                     promotion_evidence=str(result.get('promotion_evidence') or ''))
-                        if not str(result.get('sku') or '').upper().endswith('#DE'):
-                            raise ValueError('DE-Variante nicht bestätigt')
-                        if result.get('available') is True and result.get('price_review'):
-                            raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
-                        available=result.get('available') is True
-                        entry.update(status='ok' if available else 'unavailable',
-                                     usd=str(result['usd']),eur=str(result['eur_estimate']),
-                                     preview_revision=5,before_usd=str(result.get('before_usd') or ''),
-                                     note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence'))
-                                           if available and result.get('promotion_evidence')
-                                           else 'Nicht lieferbar – Variantenpreis nur zur Information' if not available
-                                           else 'EUR aus USD berechnet'))
-                    except Exception as err:
-                        entry.update(status='error',error=str(err)[:450])
-                    lumibricks_store.replace_single_bulk_preview_entry(DB_URL,str(batch['id']),product_id,entry)
-                    report['details'].append('Lumibricks: '+(
-                        'EUR-Vorschau '+str(entry['eur'])+' € erneuert (noch nicht freigegeben)'
-                        if entry['status'] in ('ok','unavailable') else
-                        'Vorschau aktualisiert, Prüfung fehlgeschlagen: '+entry.get('error','')))
-                    if entry['status']=='error':
-                        report['failed']+=1
-                        continue
+                from types import SimpleNamespace
+                source=df.loc[diagnostic_choices[chosen]]
+                sample=SimpleNamespace(db_id=source.db_id,sku=source.sku,
+                        description=source.description,lumibricks_url=preview_url_input.strip())
+                with st.spinner('Gleiche Deutschland-Markt-/Aktionspreisprüfung wie im Gesamttest …'):
+                    entry=lumibricks_preview_entry(sample,st.session_state.get('lumi_bulk_factor',0.892))
+                st.session_state['lumi_technical_probe']=entry
+        debug_entry=st.session_state.get('lumi_technical_probe')
+        if debug_entry:
+            st.write({'Artikel':debug_entry.get('sku'),'Status':debug_entry.get('status'),
+                      'DE-SKU':debug_entry.get('variant_sku'),
+                      'Varianten-ID':debug_entry.get('variant_id'),
+                      'USD':debug_entry.get('usd'),'EUR berechnet':debug_entry.get('eur'),
+                      'Regulär USD':debug_entry.get('regular_usd'),
+                      'Aktion USD':debug_entry.get('sale_usd'),
+                      'Aktionsnachweis':debug_entry.get('promotion_evidence'),
+                      'Fehler':debug_entry.get('error')})
+        with st.expander('Weitere rohe Shopify- und Sitzungsdaten (abweichende Kontexte; keine Preisfreigabe)',expanded=False):
+            # Read-only price-source diagnosis (V28.11.59). This button deliberately
+            # has no connection to the persistence functions or price history.
+            st.divider()
+            st.markdown('**🔬 Shopify-Preisquellen vergleichen (ohne Speicherung)**')
+            st.caption('Vergleicht dieselben Shopify-Varianten aus /de/products/…js und '
+                       '/products/…js. Abrufzeit in Berlin (MEZ/MESZ). '
+                       'Die Shopify-Warenkorbwährung gilt als Kontext, nicht als Beweis '
+                       'für einen EUR-Verkaufspreis.')
+            source_button=st.button('🔬 Beide Shopify-Preisquellen jetzt prüfen',
+                                    key='lumi_price_source_diagnosis')
+            diagnosis_key=f'lumi_price_source_report_{chosen}'
+            if source_button:
+                if chosen == 'Bitte Artikel wählen':
+                    st.warning('Bitte zuerst einen Artikel auswählen.')
+                elif not lumibricks_store.valid_url(preview_url_input.strip()):
+                    st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
                 else:
-                    updated,ok,failed=update_prices(updated,shop,[row_refresh_index])
-                    changed_indices.append(row_refresh_index)
-                    if failed or not ok:
-                        errfield='error' if shop=='brickmo' else 'lootstore_error'
-                        raise RuntimeError(str(updated.at[row_refresh_index,errfield]) or 'Keine Preisantwort')
-                    total_field='total' if shop=='brickmo' else 'lootstore_total'
-                    report['details'].append(f'{shop.capitalize()}: Preisprüfung erfolgreich ({fmt(updated.at[row_refresh_index,total_field])})')
-                report['ok']+=1
-            except Exception as exc:
-                report['failed']+=1
-                report['details'].append(f'{shop.capitalize()}: FEHLER – {exc}')
-                if '429' in str(exc):
-                    report['details'].append('HTTP 429: Weitere Shops für diesen Artikel nicht abgefragt.')
-                    break
-            if shop!='lumibricks': time.sleep(2)
-        try:
-            if changed_indices: save_changed_rows(updated,changed_indices)
-            st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
-        except Exception as exc:
-            report['failed']+=1
-            report['details'].append(f'Datenbank/Anzeige: FEHLER – {exc}')
-        st.session_state['last_row_price_run']=report
-        st.rerun()
-    if lumi_update:
-        st.info('Lumibricks-Preise werden ausschließlich über die gespeicherte Sammelvorschau und die einmalige Sammelfreigabe aktualisiert. Bitte den Bereich „Lumibricks – alle Preise testen und gesammelt freigeben“ verwenden.')
-    if brickmo_update or loot_update:
-        new=df.copy()
-        shop='brickmo' if brickmo_update else 'lootstore'
-        subset=list(active.index)
-        url_field='brickmo_url' if brickmo_update else 'lootstore_url'
-        indices=[i for i in subset if str(new.at[i,url_field]).strip()]
-        if not indices:
-            st.info(f'{shop}: Keine gültigen Produktlinks für die Auswahl.')
-        else:
-            st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
-            new,ok,failed=update_prices(new,shop,indices)
-            st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
-            try:
-                save_changed_rows(new,indices)
-                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
-                st.success('Preisprüfung gespeichert.')
-                st.rerun()
-            except Exception as exc:
-                st.error(f'Speichern fehlgeschlagen: {exc}')
+                    try:
+                        with st.spinner('Lese beide Shopify-Produktendpunkte …'):
+                            source_reports=lumibricks_store.diagnose_variant_price_sources(
+                                preview_url_input.strip())
+                        st.session_state[diagnosis_key]={
+                            'url':preview_url_input.strip(),
+                            'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
+                            'reports':source_reports,
+                        }
+                    except Exception as exc:
+                        st.error(f'Shopify-Preisquellen-Diagnose fehlgeschlagen: {exc}')
+            source_diagnosis=st.session_state.get(diagnosis_key)
+            if source_diagnosis:
+                st.caption('Letzter Vergleich: '+source_diagnosis['time']+' · '+source_diagnosis['url'])
+                rows=[]
+                for source_report in source_diagnosis['reports']:
+                    path=urlparse(source_report['source']).path
+                    variants=source_report.get('variants') or []
+                    if not variants:
+                        rows.append({
+                            'Quelle':path,'HTTP':source_report.get('http'),
+                            'Varianten-ID':'–','SKU':'–','Region':'–',
+                            'USD-Preis (laut JSON)':'–','Verfügbar':'–',
+                            'Shopify-Warenkorb':source_report.get('content_currency'),
+                            'Meldung':source_report.get('error') or 'Keine Varianten zurückgegeben',
+                        })
+                    for variant in variants:
+                        rows.append({
+                            'Quelle':path,'HTTP':source_report.get('http'),
+                            'Varianten-ID':variant.get('variant_id',''),
+                            'SKU':variant.get('sku',''),
+                            'Region':variant.get('title',''),
+                            'USD-Preis (laut JSON)':variant.get('amount',''),
+                            'Verfügbar':variant.get('available'),
+                            'Shopify-Warenkorb':source_report.get('content_currency'),
+                            'Meldung':source_report.get('error',''),
+                        })
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                for source_report in source_diagnosis['reports']:
+                    label=urlparse(source_report['source']).path
+                    st.caption(f"{label} · HTTP {source_report.get('http')} · "
+                               f"Serverdatum: {source_report.get('date') or 'nicht angegeben'} · "
+                               f"Cache: {source_report.get('cache') or 'nicht angegeben'} · "
+                               f"Antwort-Hash: {source_report.get('sha256') or '–'}")
+                first, second=(source_diagnosis['reports']+[{},{}])[:2]
+                v1={v['variant_id']:v for v in first.get('variants',[])}
+                v2={v['variant_id']:v for v in second.get('variants',[])}
+                shared=sorted(set(v1)&set(v2))
+                differing=[ident for ident in shared
+                           if v1[ident].get('raw_cents') != v2[ident].get('raw_cents')]
+                if differing:
+                    st.warning('Unterschiedliche Preise für identische Varianten-IDs: '
+                               +', '.join(differing))
+                elif shared:
+                    st.success(f'{len(shared)} gemeinsame Varianten-IDs: Beide Endpunkte liefern '
+                               'für diese Varianten dieselben Preiswerte.')
+                else:
+                    st.info('Keine gemeinsamen Varianten-IDs nachweisbar; Endpunkte und Fehler prüfen.')
+                st.caption('Nur Diagnose – keine Umrechnung und keine Speicherung in PostgreSQL.')
+    
+            # V28.11.60 – independent read-only session/market comparison.
+            st.divider()
+            st.markdown('**🌍 Lumibricks-Markt- und Sitzungsdiagnose (ohne Speicherung)**')
+            st.caption('Vergleicht dieselbe Shopify-DE-Variante in drei getrennten Sitzungen. '
+                       'Zeigt nur Cookie-Namen, niemals Cookie-Inhalte. '
+                       'Die Warenkorb-Währung ist kein Nachweis für einen EUR-Verkaufspreis.')
+            market_key=f'lumi_market_diag_{chosen}'
+            if st.button('🌍 Markt- und Sitzungsdaten jetzt vergleichen',
+                         key='lumi_market_diagnosis'):
+                if chosen == 'Bitte Artikel wählen':
+                    st.warning('Bitte zuerst einen Artikel auswählen.')
+                elif not lumibricks_store.valid_url(preview_url_input.strip()):
+                    st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
+                else:
+                    try:
+                        with st.spinner('Prüfe HTTP- und Browser-Sitzungen …'):
+                            market_rows=lumibricks_store.diagnose_market_sessions(preview_url_input.strip())
+                        st.session_state[market_key]={
+                            'url':preview_url_input.strip(),
+                            'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
+                            'rows':market_rows,
+                        }
+                    except Exception as exc:
+                        st.error(f'Markt-Diagnose fehlgeschlagen: {exc}')
+            market_report=st.session_state.get(market_key)
+            if market_report:
+                st.caption('Letzte Prüfung: '+market_report['time']+' · '+market_report['url'])
+                st.dataframe(pd.DataFrame(market_report['rows']),
+                             hide_index=True, use_container_width=True)
+                st.caption('Nur Diagnose: Keine Preisumrechnung, keine Änderung in PostgreSQL. '
+                           'Cookie-Werte, Sitzungs-IDs und Zugangsdaten werden nicht angezeigt.')
 
-    st.caption('Zum Bearbeiten, Ausblenden oder Löschen bitte die Aktionen direkt am Anfang der jeweiligen Tabellenzeile verwenden.')
-
-with st.expander('📥 Artikel aus CSV importieren'):
-    file=st.file_uploader('CSV mit mindestens brickmo_url, optional sku, lbrixx_sku, description, lbrixx_price',type='csv')
-    if file and st.button('CSV importieren'):
-        try:
-            incoming=pd.read_csv(file,dtype=str,keep_default_na=False,encoding='utf-8-sig')
-            if 'brickmo_url' not in incoming.columns: raise ValueError('Spalte brickmo_url fehlt.')
-            if not all(not u.strip() or valid_url(u) for u in incoming.brickmo_url): raise ValueError('Mindestens eine URL ist ungültig.')
-            incoming=normalize(incoming)
-            combined=pd.concat([st.session_state.products,incoming],ignore_index=True)
-            # Keep every distinct Odoo article; deduplicate only non-empty matching Odoo IDs.
-            ids=combined.odoo_id.astype(str).str.strip()
-            combined=combined.loc[~(ids.ne('') & ids.duplicated(keep='first'))]
-            save(combined); st.success('CSV importiert. Jetzt „Alle Preise aktualisieren“ klicken.'); st.rerun()
-        except Exception as e: st.error(str(e))
-
-with st.expander('📈 Preisverlauf je Artikel'):
-    available=st.session_state.products
-    choices={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":str(r.db_id) for _,r in available.iterrows() if str(r.db_id).strip()}
-    if choices:
-        selected=st.selectbox('Produkt für Preisverlauf',list(choices),key='history_product')
-        include_shipping=st.toggle('Versandkosten einbeziehen',value=False)
-        try:
-            history=db_store.history(DB_URL,choices[selected])
-            if history.empty:
-                st.info('Noch keine historischen Preisabfragen vorhanden. Der Verlauf beginnt mit der nächsten erfolgreichen Abfrage.')
-            else:
-                history['Wert']=history['price'].astype(float)
-                if include_shipping: history['Wert']+=history['shipping_cost'].fillna(0).astype(float)
-                chart=history.pivot_table(index='recorded_at',columns='merchant',values='Wert',aggfunc='last')
-                st.line_chart(chart)
-                st.dataframe(history.sort_values('recorded_at',ascending=False),hide_index=True,use_container_width=True)
-        except Exception as exc: st.error(f'Preisverlauf nicht verfügbar: {exc}')
-    else: st.info('Zuerst Produkte importieren.')
-
-with st.expander('🗄️ PostgreSQL-Verbindung'):
-    st.write('Datenspeicherung: Supabase PostgreSQL')
-    st.caption('Die Verbindung erfolgt serverseitig über SUPABASE_DB_URL. Keine Zugangsdaten in GitHub hinterlegen.')
