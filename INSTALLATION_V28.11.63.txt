@@ -1,0 +1,30 @@
+LBrixx Price-Crawler V28.11.63
+
+Dateien aus dem ZIP:
+  app.py
+  lumibricks_store.py
+
+Beide Dateien in GitHub im bestehenden Streamlit-Projekt ersetzen. Die drei
+Händlerlogos sind bereits direkt in app.py eingebettet, damit keine zusätzlichen
+Bilddateien in das Repository hochgeladen werden müssen.
+
+Änderungen:
+- kompakter Supabase-Verbindungsstatus neben dem Programmtitel
+- Schalter "Artikelzuordnungen verwalten": Brickmo/Lootstore-Indexierung
+  und Lumibricks-Zuordnung werden erst nach Aktivierung angezeigt
+- Logos über den drei Preisspalten
+- Günstigster lieferbarer Wettbewerber-Gesamtpreis und Abweichung zum LBrixx-Preis
+- Preisvorschau: keine Freigabe für alte Vorschauen; neue Vorschau prüft
+  DE-Varianten-Verfügbarkeit und versucht Sonderpreis-/Streichpreisabgleich
+- Ausverkaufte Produktvarianten und Punkte-/Prämienproduktlinks werden
+  nicht als reguläre Kaufangebote zugelassen.
+- Neue Sammelvorschau zeigt regulären USD-Preis, Sonderpreis und Verfügbarkeit.
+
+WICHTIG: Die bestehende Freigabe nicht für die alte V28.11.62-Vorschau benutzen.
+Bitte neue Preisvorschau starten und Stichproben L9071 (Rabatt), F9069
+(ausverkauft) und 19010 (normales statt Prämienprodukt) kontrollieren.
+Rabatte, die nicht eindeutig bestätigt werden, erscheinen als FEHLER und
+werden NICHT übernommen. Ein Live-Test im Streamlit-Server bleibt erforderlich.
+
+Keine SQL-Migration erforderlich; bestehende Preise, Verknüpfungen und
+Preisverläufe werden durch die Installation nicht geändert.
