@@ -1,0 +1,12 @@
+LBrixx Price-Crawler V28.11.60 – Markt- und Sitzungsdiagnose
+
+1. app.py und lumibricks_store.py aus diesem Archiv in GitHub ersetzen.
+2. Vorhandene Playwright-/Chromium-Installation beibehalten.
+3. In der App 15002 – Book Cafe auswählen.
+4. Den Bereich „Lumibricks Varianten-/USD→EUR-Test“ öffnen.
+5. Auf „Markt- und Sitzungsdaten jetzt vergleichen“ klicken.
+6. Tabelle mit den Sitzungskontexten vergleichen und ggf. Screenshot senden.
+
+Der Test versucht die Storefront-Länderauswahl DE nur in einer separaten
+Browser-Sitzung. Keine Preise, Verknüpfungen oder Preisverläufe werden geschrieben.
+Es werden ausschließlich Cookie-Namen angezeigt, keine Cookie-Werte.

@@ -1529,6 +1529,39 @@ else:
                 st.info('Keine gemeinsamen Varianten-IDs nachweisbar; Endpunkte und Fehler prüfen.')
             st.caption('Nur Diagnose – keine Umrechnung und keine Speicherung in PostgreSQL.')
 
+        # V28.11.60 – independent read-only session/market comparison.
+        st.divider()
+        st.markdown('**🌍 Lumibricks-Markt- und Sitzungsdiagnose (ohne Speicherung)**')
+        st.caption('Vergleicht dieselbe Shopify-DE-Variante in drei getrennten Sitzungen. '
+                   'Zeigt nur Cookie-Namen, niemals Cookie-Inhalte. '
+                   'Die Warenkorb-Währung ist kein Nachweis für einen EUR-Verkaufspreis.')
+        market_key=f'lumi_market_diag_{chosen}'
+        if st.button('🌍 Markt- und Sitzungsdaten jetzt vergleichen',
+                     key='lumi_market_diagnosis'):
+            if chosen == 'Bitte Artikel wählen':
+                st.warning('Bitte zuerst einen Artikel auswählen.')
+            elif not lumibricks_store.valid_url(preview_url_input.strip()):
+                st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
+            else:
+                try:
+                    with st.spinner('Prüfe HTTP- und Browser-Sitzungen …'):
+                        market_rows=lumibricks_store.diagnose_market_sessions(preview_url_input.strip())
+                    st.session_state[market_key]={
+                        'url':preview_url_input.strip(),
+                        'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
+                        'rows':market_rows,
+                    }
+                except Exception as exc:
+                    st.error(f'Markt-Diagnose fehlgeschlagen: {exc}')
+        market_report=st.session_state.get(market_key)
+        if market_report:
+            st.caption('Letzte Prüfung: '+market_report['time']+' · '+market_report['url'])
+            st.dataframe(pd.DataFrame(market_report['rows']),
+                         hide_index=True, use_container_width=True)
+            st.caption('Nur Diagnose: Keine Preisumrechnung, keine Änderung in PostgreSQL. '
+                       'Cookie-Werte, Sitzungs-IDs und Zugangsdaten werden nicht angezeigt.')
+
+
     if row_refresh_index is not None:
         # Different providers persist via their existing, proven pathways.
         r=df.loc[row_refresh_index]

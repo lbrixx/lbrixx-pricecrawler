@@ -662,3 +662,111 @@ def diagnose_variant_price_sources(product_url):
         reports.append(report)
         time.sleep(1)
     return reports
+
+# V28.11.60: Read-only Shopify market/session diagnosis. No database writes.
+def diagnose_market_sessions(product_url):
+    """Compare product JSON in HTTP and fresh browser market contexts.
+
+    Only names of cookies are reported, never cookie contents.
+    Prices reflect the currency explicitly returned by /cart.js.
+    """
+    import os, shutil
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    clean = canonical(product_url)
+    slug = urlparse(clean).path.rstrip('/').split('/')[-1]
+    path = '/de/products/' + quote(slug, safe='') + '.js'
+    variant_id = (parse_qs(urlparse(product_url).query).get('variant') or [''])[0]
+    results = []
+
+    def summarize(label, cart_status, cart_data, product_status, product_data, cookies, error=''):
+        currency = str((cart_data or {}).get('currency') or 'nicht gemeldet').upper()
+        country = str((cart_data or {}).get('buyer_identity', {}).get('country_code') or '') if isinstance((cart_data or {}).get('buyer_identity'), dict) else ''
+        variants = (product_data or {}).get('variants') or []
+        german = [v for v in variants if str(v.get('sku') or '').upper().endswith('#DE')]
+        selected = next((v for v in variants if str(v.get('id')) == variant_id), None) if variant_id else None
+        if selected is None and len(german) == 1:
+            selected = german[0]
+        raw = selected.get('price') if selected else None
+        amount = str(Decimal(raw)/100) if isinstance(raw, int) and not isinstance(raw,bool) else '–'
+        results.append({'Sitzung':label, 'Warenkorb HTTP':cart_status,
+                        'Warenkorb-Währung':currency, 'Land (falls gemeldet)':country or '–',
+                        'Produkt HTTP':product_status, 'Varianten-ID':str(selected.get('id','')) if selected else '–',
+                        'SKU':str(selected.get('sku','')) if selected else '–',
+                        'Produktpreis (Währung laut Warenkorb)':amount,
+                        'Cookie-Namen':', '.join(sorted(set(cookies))) or 'keine',
+                        'Fehler':error})
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    try:
+        cart = session.get(BASE+'/de/cart.js', timeout=25, headers={'Cache-Control':'no-cache'})
+        if cart.status_code == 429: raise RuntimeError('HTTP 429 bei HTTP-Warenkorb')
+        cdata = cart.json() if cart.ok else {}
+        product = session.get(BASE+path, timeout=25, headers={'Cache-Control':'no-cache'})
+        if product.status_code == 429: raise RuntimeError('HTTP 429 bei HTTP-Produkt')
+        pdata = product.json() if product.ok else {}
+        summarize('HTTP: frische Sitzung', cart.status_code, cdata, product.status_code,
+                  pdata, [cookie.name for cookie in session.cookies])
+    except Exception as exc:
+        summarize('HTTP: frische Sitzung', '–', {}, '–', {}, [], str(exc)[:220])
+        if '429' in str(exc): return results
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        summarize('Browser: Playwright', '–', {}, '–', {}, [], 'Playwright nicht installiert')
+        return results
+    executable = (os.environ.get('LBRIXX_CHROMIUM_PATH') or
+                  next((shutil.which(x) for x in ('chromium','chromium-browser','google-chrome')
+                        if shutil.which(x)), None))
+    try:
+        with sync_playwright() as pw:
+            launch = {'headless':True, 'args':['--no-sandbox','--disable-dev-shm-usage']}
+            if executable: launch['executable_path'] = executable
+            browser = pw.chromium.launch(**launch)
+            try:
+                for label, use_de in [('Browser: de-DE (frisch)',False),
+                                      ('Browser: Land DE gewählt',True)]:
+                    context = browser.new_context(locale='de-DE',timezone_id='Europe/Berlin',
+                                                  extra_http_headers={'Accept-Language':'de-DE,de;q=0.9'})
+                    try:
+                        page = context.new_page()
+                        page.goto(clean, wait_until='domcontentloaded', timeout=35000)
+                        if use_de:
+                            # This attempts an ordinary Shopify storefront localization form,
+                            # then verifies what the store actually returned. No cart changes.
+                            page.evaluate('''async () => {
+                                const form = new FormData();
+                                form.append('form_type','localization');
+                                form.append('_method','put');
+                                form.append('country_code','DE');
+                                form.append('language_code','de');
+                                await fetch('/localization', {method:'POST',body:form,
+                                  credentials:'include',redirect:'follow'});
+                            }''')
+                        page.wait_for_timeout(1200)
+                        data = page.evaluate('''async (productPath) => {
+                           const opt = {credentials:'include',cache:'no-store'};
+                           async function get(path) {
+                             try {const r=await fetch(path,opt);
+                               return {status:r.status,data:r.ok?await r.json():{}};
+                             } catch(e) {return {status:'Fehler',data:{},error:String(e)};}
+                           }
+                           return {cart:await get('/de/cart.js'),product:await get(productPath)};
+                        }''', path)
+                        cookies = [c['name'] for c in context.cookies(BASE)]
+                        summarize(label, data['cart']['status'], data['cart']['data'],
+                                  data['product']['status'], data['product']['data'], cookies,
+                                  '; '.join(x.get('error','') for x in (data['cart'],data['product']) if x.get('error')))
+                        if data['cart']['status'] == 429 or data['product']['status'] == 429:
+                            break
+                    except Exception as exc:
+                        summarize(label, '–', {}, '–', {}, [], str(exc)[:220])
+                    finally:
+                        context.close()
+            finally:
+                browser.close()
+    except Exception as exc:
+        summarize('Browser: Initialisierung', '–', {}, '–', {}, [], str(exc)[:220])
+    return results
