@@ -822,38 +822,83 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                 cents=selected.get('price')
                 if isinstance(cents,bool) or not isinstance(cents,int) or cents<=0: raise ValueError('Ungültiger Variantenpreis')
                 if selected.get('available') is not True:
-                    raise ValueError('DE-Variante ist ausverkauft oder nicht verfügbar')
+                    return dict(usd=None,eur_estimate=None,factor=factor,
+                                sku=str(selected.get('sku') or ''),variant_id=str(selected.get('id') or ''),
+                                variant_count=len(variants),available=False,
+                                price_review='DE-Variante ist ausverkauft oder nicht verfügbar',
+                                before_usd=None,regular_usd=None,sale_usd=None,
+                                promotion_evidence='',currency=currency,url=clean)
+
                 usd=Decimal(cents)/100
                 compared=selected.get('compare_at_price')
                 regular_usd=Decimal(compared)/100 if isinstance(compared,int) and not isinstance(compared,bool) and compared>cents else None
-                # A promotion can be applied by storefront JavaScript without updating
-                # Shopify /products/*.js. Inspect the selected DE variant's visible
-                # product-price block; ambiguous promotions are withheld for review.
+                # V28.11.64: Discounts are frequently rendered by the storefront,
+                # while Shopify product.js still exposes the undiscounted DE price.
+                # Inspect ONLY the visible main-product price/info area and accept
+                # a single product-specific promotion rate. Do not read discounts
+                # from recommended products elsewhere on the page.
                 promotion_review=None
+                promotion_evidence=''
                 if regular_usd is None:
                     try:
                         page.goto(clean+'?variant='+str(selected['id']),wait_until='domcontentloaded',timeout=30000)
-                        page.wait_for_timeout(1100)
+                        page.wait_for_timeout(1500)
                         display=page.evaluate('''() => {
-                           let roots=[...document.querySelectorAll('main [class*="product__info"], main [class*="product-info"], main [class*="product-details"], main .product-single, main')];
-                           let root=roots.find(e=>e && e.offsetWidth>0 && e.innerText && e.innerText.length>20) || document.querySelector('main');
-                           let text=root ? root.innerText.slice(0,3500) : '';
-                           let nodes=root?[...root.querySelectorAll('[class*="price"], [class*="sale"], s, del, [data-product-price]')]:[];
-                           return {text:text.slice(0,2000),prices:nodes.filter(e=>e.getClientRects().length && e.innerText && e.innerText.length<110).slice(0,35).map(e=>({text:e.innerText.trim(),css:String(e.className||'').slice(0,100),strike:!!e.closest('del,s')}))};
+                          const selectors=[
+                            'main .product__info-wrapper', 'main .product__info-container',
+                            'main .product-info', 'main .product-single__meta',
+                            'main .product__details', 'main [class*="product-info"]',
+                            'main [class*="product__info"]'];
+                          let roots=[];
+                          for (const selector of selectors) {
+                            roots=[...document.querySelectorAll(selector)].filter(e=>e.getClientRects().length && e.innerText.trim().length>10);
+                            if(roots.length===1) break;
+                          }
+                          if(roots.length!==1) { const main=document.querySelector('main'); const text=main ? main.innerText.slice(0,1800) : ''; return {unique:false,text,priceTexts:[]}; }
+                          let root=roots[0];
+                          // The nearest promotion label must be inside the main
+                          // product info; cart, banners, recommendations excluded.
+                          let visible=[...root.querySelectorAll('*')].filter(e=>e.getClientRects().length && e.children.length===0);
+                          let texts=visible.map(e=>e.innerText.trim()).filter(Boolean);
+                          return {unique:true,text:texts.slice(0,200).join(' '),
+                                  priceTexts:texts.filter(t=>t.length<90 && /[$€]|off|rabatt|%/i.test(t)).slice(0,80)};
                         }''')
-                        promo_text=' '.join([display['text']]+[x['text'] for x in display['prices']])
-                        pct_match=re.search(r'(?:([1-9][0-9]?)\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*([1-9][0-9]?)\s*%)',promo_text,re.I)
-                        if pct_match:
-                            pct=Decimal(pct_match.group(1) or pct_match.group(2))
-                            expected=(usd*(Decimal(100)-pct)/100).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
-                            # Verify a visibly USD-tagged discounted amount against
-                            # both the promotion percentage and regular Shopify price.
-                            tokens=[Decimal(m.replace(',','')) for m in re.findall(r'\$\s*([0-9]{1,4}(?:,[0-9]{3})*\.[0-9]{2})',promo_text)]
-                            candidates=sorted(set(x for x in tokens if 0<x<usd and abs(x-expected)<=Decimal('0.03')))
-                            if len(candidates)==1:
-                                regular_usd=usd;usd=candidates[0]
-                            else:
-                                promotion_review=f'Aktion {pct}% erkannt, Aktionspreis nicht eindeutig (Shopify {usd} USD; erwarteter Rabattpreis {expected} USD)'
+                        if not display.get('unique'):
+                            # Ambiguous document structure must not authorize a discount.
+                            if re.search(r'\b(?:[1-9][0-9]?\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*[1-9][0-9]?\s*%)',display.get('text',''),re.I):
+                                promotion_review='Aktionspreis nicht verifizierbar: Hauptproduktbereich nicht eindeutig'
+                        else:
+                            # Product-level percentages, not banners from suggestions.
+                            content=' '.join(display.get('priceTexts',[]))
+                            discounts={int(x or y) for x,y in re.findall(
+                                r'(?<!\d)([1-9][0-9]?)\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*([1-9][0-9]?)\s*%',
+                                content,re.I)}
+                            if len(discounts)>1:
+                                promotion_review='Mehrere Rabattangaben im Hauptproduktbereich: '+', '.join(map(str,sorted(discounts)))
+                            elif len(discounts)==1:
+                                pct=next(iter(discounts))
+                                expected=(usd*(Decimal(100)-Decimal(pct))/100).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
+                                amounts=[]
+                                for raw in re.findall(r'\$\s*([0-9]{1,4}(?:,[0-9]{3})*\.[0-9]{2})',content):
+                                    amounts.append(Decimal(raw.replace(',','')))
+                                matching=[x for x in set(amounts) if abs(x-expected)<=Decimal('0.03')]
+                                if len(matching)==1:
+                                    promo_price=matching[0]
+                                    promotion_evidence=f'{pct}% Rabatt, Preis im Hauptproduktbereich sichtbar'
+                                elif not matching and 0 < expected < usd:
+                                    # Site can render the action amount in EUR or
+                                    # omit its USD equivalent in the bot session.
+                                    # The sale is derived from an unambiguous
+                                    # product-level percentage, NOT verified as
+                                    # a direct displayed USD price.
+                                    promo_price=expected
+                                    promotion_evidence=f'{pct}% Rabatt am Hauptprodukt; USD-Aktionspreis aus Prozent berechnet'
+                                else:
+                                    promo_price=None
+                                    promotion_review=f'{pct}% Rabatt, mehrere widersprüchliche Aktionspreise'
+                                if promo_price is not None:
+                                    regular_usd=usd
+                                    usd=promo_price
                     except Exception as promo_exc:
                         promotion_review='Aktionsprüfung nicht verlässlich: '+str(promo_exc)[:180]
                 eur=(usd*factor).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
@@ -865,7 +910,7 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                             selection_reason=reason,variant_count=len(variants),before_usd=before_usd,
                             changed=before_usd is not None and before_usd!=usd,currency=currency,
                             available=True,regular_usd=regular_usd,sale_usd=usd if regular_usd else None,
-                            price_review=promotion_review,
+                            price_review=promotion_review,promotion_evidence=promotion_evidence,
                             localization_http=status,url=clean,status='TEST / NICHT GESPEICHERT')
             finally: context.close()
         finally: browser.close()
@@ -917,7 +962,7 @@ def approve_bulk_preview(db_url,bid):
         if batch['state']!='ready': raise ValueError('Nur vollständig abgeschlossene Vorschauen dürfen freigegeben werden')
         entries=batch['entries']
         successes=[e for e in entries if e.get('status')=='ok']
-        if not successes or any(e.get('preview_revision')!=2 for e in successes):
+        if not successes or any(e.get('preview_revision')!=3 for e in successes):
             raise ValueError('Veraltete Preisvorschau: Aktionspreis-/Verfügbarkeitsprüfung fehlt. Bitte neu erstellen.')
         if not successes: raise ValueError('Keine gültigen Preise zur Freigabe')
         if len({int(e['product_id']) for e in successes})!=len(successes):

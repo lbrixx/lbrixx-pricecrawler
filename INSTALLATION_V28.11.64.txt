@@ -1,0 +1,16 @@
+LBrixx Price-Crawler V28.11.64 – Aktionspreis-Erkennung und Diagnose
+
+Basis: V28.11.63. app.py und lumibricks_store.py im GitHub-Repository ersetzen.
+Andere Dateien und PostgreSQL-Tabellen unverändert lassen.
+
+Änderungen:
+- Aktionsrabatte werden nur aus dem sichtbaren Hauptprodukt-Informationsbereich ausgelesen.
+- Bei eindeutigem Produktrabatt (z. B. 35 % OFF) wird der USD-Aktionspreis aus dem bestätigten DE-Marktpreis berechnet, wenn der direkte USD-Aktionspreis nicht eindeutig im Hauptbereich vorliegt. Die Preisvorschau weist die Berechnung ausdrücklich aus.
+- Unterschiedliche oder nicht produktbezogene Rabatte bleiben zur Prüfung gesperrt.
+- Shopify-DE-SKU, Varianten-ID und Verfügbarkeit werden auch für fehlerhafte Artikeldurchläufe in die Vorschau übernommen, wenn technisch ermittelt.
+- Nicht verfügbare DE-Varianten bleiben von der Freigabe ausgeschlossen.
+- Neue Vorschauen tragen Revision 3; ältere Vorschauen können nicht versehentlich freigegeben werden.
+- Keine automatische Übernahme in PostgreSQL vor expliziter Sammelfreigabe.
+
+Nach Installation neuen Testlauf starten. Besonders Artikel 19002 (F9051) und L9071 prüfen und den Aktionsnachweis ansehen.
+Die Promo-Berechnung ist abhängig vom eindeutig erkannten Rabatt auf der Live-Produktseite; kein Live-Test der Website wurde ausgeführt.
