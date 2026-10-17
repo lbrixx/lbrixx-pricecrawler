@@ -1451,6 +1451,28 @@ else:
                 except Exception as exc:
                     st.error(f'Lumibricks-Variantentest fehlgeschlagen: {exc}')
 
+        st.divider()
+        st.markdown('**🌍 DE-Markt-Variantenpreis testen (ohne Speicherung)**')
+        st.caption('Chromium wählt Deutschland und liest anschließend die Shopify-Variante. '
+                   'EUR ist eine Schätzung mit Faktor 0,892; es wird nichts gespeichert.')
+        if st.button('🌍 Deutschland-Preisvorschau starten',key='lumi_de_price_preview'):
+            if chosen=='Bitte Artikel wählen':
+                st.warning('Bitte einen Artikel auswählen.')
+            elif not lumibricks_store.valid_url(preview_url_input.strip()):
+                st.warning('Bitte einen gültigen Lumibricks-Link angeben.')
+            else:
+                try:
+                    with st.spinner('Prüfe Shopify-Variantenpreis nach DE-Auswahl …'):
+                        result=lumibricks_store.preview_de_market_usd_to_eur(preview_url_input.strip())
+                    st.warning(f"NUR TEST / NICHT GESPEICHERT – {result['usd']} USD × {result['factor']} → ungefähr {result['eur_estimate']} EUR")
+                    st.write(f"SKU: {result['sku']} · ID: {result['variant_id']} · Varianten: {result['variant_count']}")
+                    st.write(f"Vor DE-Auswahl: {result['before_usd']} USD · Nach DE-Auswahl: {result['usd']} USD · HTTP: {result['localization_http']}")
+                    st.caption('Auswahl: '+result['selection_reason']+'; Warenkorb-Währung: '+result['currency'])
+                    if not result['changed']:
+                        st.info('Die DE-Auswahl hat den Variantenpreis nicht verändert; Marktbestätigung bleibt unklar.')
+                except Exception as exc:
+                    st.error(f'DE-Marktpreis-Vorschau fehlgeschlagen: {exc}')
+
         # Read-only price-source diagnosis (V28.11.59). This button deliberately
         # has no connection to the persistence functions or price history.
         st.divider()

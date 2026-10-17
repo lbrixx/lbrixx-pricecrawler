@@ -1,0 +1,4 @@
+V28.11.61: DE-Markt-Preisvorschau ausschließlich im Testmodus.
+Dateien app.py und lumibricks_store.py ersetzen.
+Playwright und Chromium wie bisher erforderlich.
+Keine Schätzwerte werden in die Datenbank geschrieben.

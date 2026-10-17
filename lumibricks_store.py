@@ -770,3 +770,64 @@ def diagnose_market_sessions(product_url):
     except Exception as exc:
         summarize('Browser: Initialisierung', '–', {}, '–', {}, [], str(exc)[:220])
     return results
+
+
+# V28.11.61: browser session-based market price preview (read-only).
+def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
+    import os, shutil
+    from playwright.sync_api import sync_playwright
+    clean=canonical(product_url)
+    slug=urlparse(clean).path.rstrip('/').split('/')[-1]
+    path='/de/products/'+quote(slug,safe='')+'.js'
+    factor=Decimal(str(factor))
+    if not Decimal('0') < factor < Decimal('2'):
+        raise ValueError('Ungültiger Faktor')
+    executable=os.environ.get('LBRIXX_CHROMIUM_PATH') or next((shutil.which(x) for x in ('chromium','chromium-browser','google-chrome') if shutil.which(x)),None)
+    js_fetch="""async (path) => {
+      const get=async p=>{let r=await fetch(p,{credentials:'include',cache:'no-store'});
+        return {status:r.status,data:r.ok?await r.json():{}}};
+      return {cart:await get('/de/cart.js'),product:await get(path)};
+    }"""
+    js_localize="""async () => {
+      let f=new FormData();f.append('form_type','localization');f.append('_method','put');
+      f.append('country_code','DE');f.append('language_code','de');
+      let r=await fetch('/localization',{method:'POST',body:f,credentials:'include',redirect:'follow'});
+      return r.status;
+    }"""
+    with sync_playwright() as pw:
+        args={'headless':True,'args':['--no-sandbox','--disable-dev-shm-usage']}
+        if executable: args['executable_path']=executable
+        browser=pw.chromium.launch(**args)
+        try:
+            context=browser.new_context(locale='de-DE',timezone_id='Europe/Berlin',extra_http_headers={'Accept-Language':'de-DE,de;q=0.9'})
+            try:
+                page=context.new_page()
+                page.goto(clean,wait_until='domcontentloaded',timeout=35000)
+                before=page.evaluate(js_fetch,path)
+                status=page.evaluate(js_localize)
+                if status==429: raise RuntimeError('HTTP 429 bei Marktwechsel')
+                if status<200 or status>=400: raise RuntimeError(f'Marktwechsel HTTP {status}')
+                page.wait_for_timeout(1200)
+                after=page.evaluate(js_fetch,path)
+                for stage,data in [('vorher',before),('nachher',after)]:
+                    for kind in ('cart','product'):
+                        code=data[kind]['status']
+                        if code!=200: raise RuntimeError(f'{stage} {kind}: HTTP {code}')
+                currency=str(after['cart']['data'].get('currency') or '').upper()
+                if currency!='USD': raise ValueError('Shopify-Währung nicht USD: '+currency)
+                variants=after['product']['data'].get('variants') or []
+                selected,reason,requested=_preview_variant(variants,product_url)
+                cents=selected.get('price')
+                if isinstance(cents,bool) or not isinstance(cents,int) or cents<=0: raise ValueError('Ungültiger Variantenpreis')
+                usd=Decimal(cents)/100
+                eur=(usd*factor).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
+                vid=str(selected.get('id') or '')
+                old=next((x for x in before['product']['data'].get('variants',[]) if str(x.get('id'))==vid),None)
+                oc=old.get('price') if old else None
+                before_usd=Decimal(oc)/100 if isinstance(oc,int) and not isinstance(oc,bool) else None
+                return dict(usd=usd,eur_estimate=eur,factor=factor,sku=str(selected.get('sku') or ''),variant_id=vid,
+                            selection_reason=reason,variant_count=len(variants),before_usd=before_usd,
+                            changed=before_usd is not None and before_usd!=usd,currency=currency,
+                            localization_http=status,url=clean,status='TEST / NICHT GESPEICHERT')
+            finally: context.close()
+        finally: browser.close()
