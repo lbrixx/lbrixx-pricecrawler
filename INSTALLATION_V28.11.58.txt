@@ -1,0 +1,12 @@
+LBrixx Price-Crawler V28.11.58 – Shopify-Preisquellenvergleich
+
+Basis: V28.11.57. Nur app.py und lumibricks_store.py ersetzen.
+Die bestehenden Playwright-/Chromium-Abhängigkeiten bleiben unverändert.
+
+Test: 15002 Book Cafe in „Einzelnen Artikel aktualisieren“ wählen,
+„Lumibricks Varianten-/USD→EUR-Test“ öffnen und
+„Shopify-Preisquellen vergleichen (ohne Speicherung)“ drücken.
+
+Vergleicht /de/products/book-cafe-1718pcs.js und /products/book-cafe-1718pcs.js
+anhand der exakten Varianten-IDs. Zeigt Rohpreise, HTTP-/Cache-Diagnose.
+Schreibt keine Preise und ändert keine Zuordnungen.

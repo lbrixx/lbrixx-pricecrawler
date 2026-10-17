@@ -604,3 +604,61 @@ def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
         'variant_count': len(variants), 'url': clean, 'currency': currency,
         'status': 'NICHT VERIFIZIERTE SCHÄTZUNG',
     }
+
+
+# V28.11.58: Read-only comparison of two Shopify product JSON routes.
+def diagnose_variant_price_sources(product_url):
+    """Compare same variant IDs across routes; no price persistence or conversion."""
+    import hashlib
+    clean = canonical(product_url)
+    slug = urlparse(clean).path.rstrip('/').split('/')[-1]
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    currency = _shopify_currency(session)
+    paths = [f'/de/products/{quote(slug, safe="")}.js',
+             f'/products/{quote(slug, safe="")}.js']
+    reports = []
+    for path in paths:
+        source_url = BASE + path
+        response = session.get(source_url, timeout=25, headers={
+            'Accept': 'application/json', 'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'})
+        if response.status_code == 429:
+            raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen – Diagnose gestoppt')
+        report = {'source': source_url, 'http': response.status_code,
+                  'response_url': response.url,
+                  'content_currency': currency,
+                  'date': response.headers.get('Date',''),
+                  'cache': response.headers.get('X-Cache','') or response.headers.get('CF-Cache-Status',''),
+                  'etag': response.headers.get('ETag',''),
+                  'sha256': hashlib.sha256(response.content).hexdigest()[:16],
+                  'variants': [], 'error': ''}
+        if not response.ok:
+            report['error'] = f'HTTP {response.status_code}'
+            reports.append(report)
+            continue
+        try:
+            product = response.json()
+            if not isinstance(product,dict):
+                raise ValueError('Antwort ist kein Produktobjekt')
+            for item in product.get('variants',[]):
+                raw = item.get('price')
+                if isinstance(raw,bool) or not isinstance(raw,int) or raw < 0:
+                    price = 'unbekannt'
+                else:
+                    price = str((Decimal(raw)/100).quantize(Decimal('0.01')))
+                report['variants'].append({
+                    'source': path, 'variant_id': str(item.get('id','')),
+                    'sku':str(item.get('sku','')),
+                    'title': str(item.get('title','')),
+                    'available':item.get('available'),
+                    'raw_cents':raw, 'amount':price,
+                    'shopify_cart_currency':currency,
+                })
+            report['product_id'] = str(product.get('id',''))
+            report['product_price_cents'] = product.get('price')
+        except (ValueError,TypeError,AttributeError) as exc:
+            report['error'] = f'Produkt-JSON nicht interpretierbar: {exc}'
+        reports.append(report)
+        time.sleep(1)
+    return reports
