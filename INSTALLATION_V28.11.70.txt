@@ -1,0 +1,21 @@
+LBrixx Price-Crawler V28.11.70 – Verifizierte Sonderpreise
+
+Die Dateien app.py und lumibricks_store.py im GitHub-Repository ersetzen und
+Streamlit neu starten. Bestehende Datenbanktabellen und Preisverläufe bleiben erhalten.
+
+Korrektur: Aktionspreise im sichtbaren Hauptproduktbereich werden anhand des
+angezeigten reduzierten Preises, des Streichpreises und des Rabatts gemeinsam
+geprüft. Der Shopify-Vollpreis muss nicht dem Streichpreis entsprechen.
+Allgemeine Gutscheinbanner werden nicht als Produktaktion übernommen.
+
+Einzeltest: Über das 🔄-Symbol in der Artikelzeile L9071 / 19002 erneut prüfen.
+Die bestehende, noch nicht freigegebene Lumibricks-Vorschau wird aktualisiert.
+Vor Bestätigung der Sammelfreigabe die Preisangaben auf der Website prüfen.
+
+Bekannte Referenzen aus Nutzer-Screenshots:
+L9071: 121,37 USD reduziert statt 202,29 USD, 40 % Rabatt, ungefähr 108 EUR.
+19002: 81,24 USD reduziert statt 124,99 USD, 35 % Rabatt, ungefähr 72 EUR.
+Diese Werte sind NICHT im Anwendungscode fest hinterlegt.
+
+Statische Syntaxprüfung und Parser-Tests erfolgreich; Live-Zugriff auf die
+Lumibricks-Seite aus dieser Umgebung nicht möglich.

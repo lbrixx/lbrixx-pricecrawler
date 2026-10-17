@@ -772,6 +772,38 @@ def diagnose_market_sessions(product_url):
     return results
 
 
+# V28.11.70: Verify visible product-specific sale/compare-at pairs.
+# A general percentage banner without matching prices is NOT a product discount.
+def _visible_product_sale_pair(text):
+    """Return (sale USD, regular USD, percentage) only for one coherent price pair.
+
+    Supports both '$121.37' and '121,37 $' as shown by localized themes.
+    Prices must be adjacent and their ratio must agree with the nearby badge.
+    """
+    t = str(text or '').replace('\u00a0', ' ').replace('\u202f', ' ')
+    money = re.compile(r'(?<![\w\d])(?:\$\s*|USD\s*)(\d{1,4}(?:[.,]\d{3})*[.,]\d{2})|(?<![\w\d])(\d{1,4}(?:[.,]\d{3})*[.,]\d{2})\s*(?:USD|\$)', re.I)
+    badge = re.compile(r'(?<!\d)([1-9]\d?)\s*%\s*(?:OFF|RABATT|SALE)|(?:OFF|RABATT|SALE)\s*([1-9]\d?)\s*%', re.I)
+    def amount(raw):
+        # decimal separator is the rightmost punctuation mark
+        pos=max(raw.rfind(','),raw.rfind('.'))
+        return Decimal(raw[:pos].replace(',','').replace('.','')+'.'+raw[pos+1:])
+    prices=[(m.start(),m.end(),amount(m.group(1) or m.group(2))) for m in money.finditer(t)]
+    badges=[(m.start(),m.end(),int(m.group(1) or m.group(2))) for m in badge.finditer(t)]
+    matches=[]
+    for i,(start,end,first) in enumerate(prices[:-1]):
+        nstart,nend,second=prices[i+1]
+        if nstart-end>70 or first==second or min(first,second)<=0:
+            continue
+        sale,regular=min(first,second),max(first,second)
+        for bstart,bend,pct in badges:
+            if min(abs(bstart-nend),abs(start-bend))>110:
+                continue
+            expected=(regular*(100-Decimal(pct))/100).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
+            if abs(sale-expected)<=Decimal('0.03'):
+                matches.append((sale,regular,pct))
+    unique=list(dict.fromkeys(matches))
+    return unique[0] if len(unique)==1 else None
+
 # V28.11.61: browser session-based market price preview (read-only).
 def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
     import os, shutil
@@ -842,82 +874,64 @@ def preview_de_market_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
                 usd=Decimal(cents)/100
                 compared=selected.get('compare_at_price')
                 regular_usd=Decimal(compared)/100 if isinstance(compared,int) and not isinstance(compared,bool) and compared>cents else None
-                # V28.11.65: A general store discount (often 10%) must NEVER
-                # become a product-specific reduced price. Accept promotional
-                # prices only when two visible monetary amounts and the discount
-                # form a consistent price pair adjacent to the product heading.
+                # Product-specific promotions must be verified against the
+                # two *visible* prices. The storefront compare-at can differ
+                # from Shopify's non-promotional variant price (e.g. L9071).
                 promotion_review=None
                 promotion_evidence=''
-                if regular_usd is None and is_available:
-                    try:
-                        page.goto(clean+'?variant='+str(selected['id']),wait_until='domcontentloaded',timeout=30000)
-                        page.wait_for_timeout(1300)
-                        display=page.evaluate(r'''() => {
-                          const shown=e=>!!(e && e.getClientRects().length && getComputedStyle(e).visibility!=='hidden');
-                          const heading=[...document.querySelectorAll('main h1, h1')].find(e=>shown(e) && e.innerText.trim().length>2);
-                          if(!heading) return {target:false,reason:'Kein sichtbarer Produkttitel',priceTexts:[],text:''};
-                          // Choose the nearest product detail block with prices,
-                          // never scan banners, recommendations or entire page.
-                          let root=null;
-                          let node=heading.parentElement;
-                          for(let i=0;node && i<6;i++,node=node.parentElement){
-                            const t=(node.innerText||'').slice(0,1600);
-                            const nums=t.match(/(?:\$|USD\s*)\s*\d[\d,.]*/gi)||[];
-                            if(nums.length>=2 && t.length<1800){root=node;break;}
-                          }
-                          if(!root){
-                            // Some themes separate title and price into siblings.
-                            // Inspect only the first part of the nearest main block.
-                            let info=heading.closest('.product__info-wrapper,.product-info,.product__info-container,.product-single__meta,[class*="product-info"]');
-                            if(info && shown(info)) root=info;
-                          }
-                          if(!root) return {target:false,reason:'Kein eindeutiger Produktpreisblock',priceTexts:[],text:''};
-                          const leaves=[...root.querySelectorAll('*')].filter(e=>shown(e) && e.children.length===0);
-                          const texts=leaves.map(e=>(e.innerText||'').trim()).filter(Boolean);
-                          let firstPrice=texts.findIndex(t=>/(?:\$|USD\s*)\s*\d/.test(t));
-                          if(firstPrice<0) return {target:false,reason:'Produktpreis nicht in USD sichtbar',priceTexts:[],text:''};
-                          // Sale and compare prices are typically next to each
-                          // other. Never accept remote discount banners.
-                          const group=texts.slice(Math.max(0,firstPrice-2),firstPrice+7);
-                          return {target:true,text:group.join(' '),priceTexts:group};
-                        }''')
-                        if display.get('target'):
-                            content=' '.join(display.get('priceTexts') or [])
-                            amounts=[]
-                            for raw in re.findall(r'(?:\$\s*|USD\s*)([0-9]{1,4}(?:,[0-9]{3})*\.[0-9]{2})',content,re.I):
-                                amounts.append(Decimal(raw.replace(',','')))
-                            amounts=sorted(set(amounts))
-                            discounts={int(x or y) for x,y in re.findall(
-                                r'(?<!\d)([1-9][0-9]?)\s*%\s*(?:OFF|RABATT)|(?:OFF|RABATT)\s*([1-9][0-9]?)\s*%',
-                                content,re.I)}
-                            if len(discounts)==1 and len(amounts)>=2:
-                                pct=next(iter(discounts))
-                                expected=(usd*(Decimal(100)-Decimal(pct))/100).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
-                                old_matches=[x for x in amounts if abs(x-usd)<=Decimal('0.03')]
-                                sale_matches=[x for x in amounts if abs(x-expected)<=Decimal('0.03') and x < usd]
-                                if len(old_matches)==1 and len(sale_matches)==1:
-                                    regular_usd=usd
-                                    usd=sale_matches[0]
-                                    promotion_evidence=f'{pct}% Rabatt; regulärer und reduzierter USD-Preis am Hauptprodukt bestätigt'
-                                else:
-                                    # Discount is near the product but not
-                                    # verifiable for the DE-market variant.
-                                    promotion_review=f'Aktionspreis nicht bestätigt: {pct}% und Preis-Paar passen nicht zur DE-Variante ({usd} USD)'
-                            elif len(discounts)>1 and len(amounts)>=2:
-                                promotion_review='Mehrere produktnahe Rabattangaben; kein eindeutiger Aktionspreis'
-                            elif len(amounts)>=2 and len(discounts)==0:
-                                # Compare-at price can be rendered without a
-                                # percent; require the higher price to equal the
-                                # confirmed DE regular price.
-                                sale=[x for x in amounts if x<usd and x>0]
-                                if any(abs(x-usd)<=Decimal('0.03') for x in amounts) and len(sale)==1:
-                                    regular_usd=usd
-                                    usd=sale[0]
-                                    promotion_evidence='Reduzierter USD-Preis und regulärer DE-Preis im Hauptprodukt bestätigt'
-                            # If only a generic 10% banner or a lone percentage
-                            # exists, do NOT reduce the price or fail the product.
-                    except Exception as promo_exc:
-                        promotion_review='Aktionsprüfung nicht verlässlich: '+str(promo_exc)[:180]
+                try:
+                    page.goto(clean+'?variant='+str(selected['id']),wait_until='domcontentloaded',timeout=30000)
+                    page.wait_for_timeout(1700)
+                    display=page.evaluate(r'''() => {
+                      const shown=e=>!!(e && e.getClientRects().length && getComputedStyle(e).visibility!=='hidden');
+                      const heading=[...document.querySelectorAll('main h1, h1')].find(e=>shown(e) && (e.innerText||'').trim().length>2);
+                      if(!heading) return {target:false,reason:'Kein Produkttitel',text:''};
+                      // Inspect only the product details closest to its title.
+                      // Exclude storewide banners, recommendations and footer.
+                      const selectors=['.product__info-wrapper','.product__info-container',
+                        '.product-single__meta','.product-info','.product__details',
+                        '[class*="product-info"]','[class*="product-detail"]'];
+                      let root=heading.closest(selectors.join(','));
+                      if(!root){
+                        let node=heading.parentElement;
+                        for(let i=0;node && i<6;i++,node=node.parentElement){
+                          const val=(node.innerText||'');
+                          const count=(val.match(/\$|USD|€/g)||[]).length;
+                          if(count>=2 && val.length<3500){root=node;break;}
+                        }
+                      }
+                      if(!root) return {target:false,reason:'Produkt-Infoblock fehlt',text:''};
+                      const parts=[...root.querySelectorAll('*')]
+                        .filter(e=>shown(e) && e.children.length===0)
+                        .map(e=>(e.innerText||'').trim()).filter(Boolean);
+                      const isMoney=t=>/(?:\$\s*\d|USD\s*\d|\d[.,]\d\d\s*(?:USD|\$))/.test(t);
+                      const first=parts.findIndex(isMoney);
+                      if(first<0) return {target:false,reason:'Keine USD-Produktpreise',text:''};
+                      // Sale, compare-at and percentage are adjacent in the
+                      // actual product price component; disregard faraway text.
+                      return {target:true,text:parts.slice(Math.max(0,first-2),first+12).join(' ')};
+                    }''')
+                    if display.get('target'):
+                        price_text=display.get('text') or ''
+                        pair=_visible_product_sale_pair(price_text)
+                        if pair:
+                            sale,regular,pct=pair
+                            # A sale pair in the correct selected variant's
+                            # product details is stronger evidence than a
+                            # regular Shopify JSON price. Never assume they
+                            # must have the same compare-at amount.
+                            regular_usd=regular
+                            usd=sale
+                            promotion_evidence=(f'{pct}% Rabatt; sichtbarer Produkt-Aktionspreis '
+                                f'{sale} USD statt {regular} USD (Shopify-Variante {selected.get("id")})')
+                        elif re.search(r'\b(?:[1-9]\d?)\s*%\s*(?:OFF|RABATT)\b',price_text,re.I):
+                            # A discount badge without a verifiable price pair
+                            # is not permission to use the undiscounted price.
+                            promotion_review='Produktbezogener Rabatt sichtbar, aber Aktionspreis-Paar nicht eindeutig bestätigt'
+                    # If product detail inspection is unavailable we do not
+                    # derive a discount from generic advertising elsewhere.
+                except Exception as promo_exc:
+                    promotion_review='Produktpreisprüfung nicht vollständig: '+str(promo_exc)[:180]
                 eur=(usd*factor).quantize(Decimal('1'),rounding=ROUND_HALF_UP)
                 vid=str(selected.get('id') or '')
                 old=next((x for x in before['product']['data'].get('variants',[]) if str(x.get('id'))==vid),None)
