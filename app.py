@@ -1451,6 +1451,84 @@ else:
                 except Exception as exc:
                     st.error(f'Lumibricks-Variantentest fehlgeschlagen: {exc}')
 
+        # Read-only price-source diagnosis (V28.11.59). This button deliberately
+        # has no connection to the persistence functions or price history.
+        st.divider()
+        st.markdown('**🔬 Shopify-Preisquellen vergleichen (ohne Speicherung)**')
+        st.caption('Vergleicht dieselben Shopify-Varianten aus /de/products/…js und '
+                   '/products/…js. Abrufzeit in Berlin (MEZ/MESZ). '
+                   'Die Shopify-Warenkorbwährung gilt als Kontext, nicht als Beweis '
+                   'für einen EUR-Verkaufspreis.')
+        source_button=st.button('🔬 Beide Shopify-Preisquellen jetzt prüfen',
+                                key='lumi_price_source_diagnosis')
+        diagnosis_key=f'lumi_price_source_report_{chosen}'
+        if source_button:
+            if chosen == 'Bitte Artikel wählen':
+                st.warning('Bitte zuerst einen Artikel auswählen.')
+            elif not lumibricks_store.valid_url(preview_url_input.strip()):
+                st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
+            else:
+                try:
+                    with st.spinner('Lese beide Shopify-Produktendpunkte …'):
+                        source_reports=lumibricks_store.diagnose_variant_price_sources(
+                            preview_url_input.strip())
+                    st.session_state[diagnosis_key]={
+                        'url':preview_url_input.strip(),
+                        'time':datetime.now(ZoneInfo('Europe/Berlin')).strftime('%d.%m.%Y %H:%M:%S %Z'),
+                        'reports':source_reports,
+                    }
+                except Exception as exc:
+                    st.error(f'Shopify-Preisquellen-Diagnose fehlgeschlagen: {exc}')
+        source_diagnosis=st.session_state.get(diagnosis_key)
+        if source_diagnosis:
+            st.caption('Letzter Vergleich: '+source_diagnosis['time']+' · '+source_diagnosis['url'])
+            rows=[]
+            for source_report in source_diagnosis['reports']:
+                path=urlparse(source_report['source']).path
+                variants=source_report.get('variants') or []
+                if not variants:
+                    rows.append({
+                        'Quelle':path,'HTTP':source_report.get('http'),
+                        'Varianten-ID':'–','SKU':'–','Region':'–',
+                        'USD-Preis (laut JSON)':'–','Verfügbar':'–',
+                        'Shopify-Warenkorb':source_report.get('content_currency'),
+                        'Meldung':source_report.get('error') or 'Keine Varianten zurückgegeben',
+                    })
+                for variant in variants:
+                    rows.append({
+                        'Quelle':path,'HTTP':source_report.get('http'),
+                        'Varianten-ID':variant.get('variant_id',''),
+                        'SKU':variant.get('sku',''),
+                        'Region':variant.get('title',''),
+                        'USD-Preis (laut JSON)':variant.get('amount',''),
+                        'Verfügbar':variant.get('available'),
+                        'Shopify-Warenkorb':source_report.get('content_currency'),
+                        'Meldung':source_report.get('error',''),
+                    })
+            if rows:
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            for source_report in source_diagnosis['reports']:
+                label=urlparse(source_report['source']).path
+                st.caption(f"{label} · HTTP {source_report.get('http')} · "
+                           f"Serverdatum: {source_report.get('date') or 'nicht angegeben'} · "
+                           f"Cache: {source_report.get('cache') or 'nicht angegeben'} · "
+                           f"Antwort-Hash: {source_report.get('sha256') or '–'}")
+            first, second=(source_diagnosis['reports']+[{},{}])[:2]
+            v1={v['variant_id']:v for v in first.get('variants',[])}
+            v2={v['variant_id']:v for v in second.get('variants',[])}
+            shared=sorted(set(v1)&set(v2))
+            differing=[ident for ident in shared
+                       if v1[ident].get('raw_cents') != v2[ident].get('raw_cents')]
+            if differing:
+                st.warning('Unterschiedliche Preise für identische Varianten-IDs: '
+                           +', '.join(differing))
+            elif shared:
+                st.success(f'{len(shared)} gemeinsame Varianten-IDs: Beide Endpunkte liefern '
+                           'für diese Varianten dieselben Preiswerte.')
+            else:
+                st.info('Keine gemeinsamen Varianten-IDs nachweisbar; Endpunkte und Fehler prüfen.')
+            st.caption('Nur Diagnose – keine Umrechnung und keine Speicherung in PostgreSQL.')
+
     if row_refresh_index is not None:
         # Different providers persist via their existing, proven pathways.
         r=df.loc[row_refresh_index]

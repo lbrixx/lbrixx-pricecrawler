@@ -1,0 +1,13 @@
+LBrixx Price-Crawler V28.11.59 – Shopify-Preisquellen-Diagnose
+
+Aus V28.11.58. In GitHub app.py und lumibricks_store.py ersetzen.
+
+Im Bereich „Einzelnen Artikel aktualisieren“ Artikel 15002 wählen; im
+„Lumibricks Varianten-/USD→EUR-Test“ auf „Beide Shopify-Preisquellen jetzt prüfen“ klicken.
+Es erscheinen alle Varianten beider Endpunkte mit Preis, ID, HTTP-Status,
+Serverdatum, Cache-Hinweis und einem Vergleich identischer Varianten-IDs.
+
+Nur lesender Diagnoseabruf; keine Preise oder Zuordnungen werden gespeichert.
+Die bisherige Preisberechnung im Testmodus bleibt unverändert.
+
+Playwright/Chromium-Einrichtung aus V28.11.54 bleibt unberührt.
