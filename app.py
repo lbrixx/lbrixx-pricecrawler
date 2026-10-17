@@ -1388,7 +1388,7 @@ else:
     .lbrixx-table td.price-gap {font-weight:700;}
     .lbrixx-table td.gap-more {color:#ffb1a9!important;}
     .lbrixx-table td.gap-less {color:#a9e9bd!important;}
-    .lbrixx-table th .merchant-logo {display:block;object-fit:contain;width:130px;height:30px;margin:0 auto 5px;}
+    .lbrixx-table th .merchant-logo {display:block;box-sizing:content-box;object-fit:contain;width:130px;height:34px;margin:0 auto 7px;padding:9px 13px;background:#fff;border-radius:6px;}
     .lbrixx-table th a:hover {text-decoration:underline!important;}
     .lbrixx-table th .refresh-price {display:block; box-sizing:border-box; text-align:center; margin:0 0 7px 0;
         padding:7px 10px; background:#151c28; border:1px solid #7b8795; border-radius:7px;
@@ -1417,7 +1417,7 @@ else:
     # Refresh links are embedded in each table header; horizontally scrolling the
     # table now moves a button and its corresponding price column together.
     st.markdown('#### Preise aktualisieren')
-    st.caption('Aktualisieren direkt oberhalb der jeweiligen Preisspalte. Mindestens 2 Sekunden Abstand; HTTP 429 stoppt die Serie. Zeitangaben in Berlin (MEZ/MESZ).')
+    st.caption('Zeilen-🔄: Brickmo/Lootstore aktualisieren, Lumibricks nur in der offenen Sammelvorschau nachprüfen. Händler-🔄: Sammelprüfung. Zeitangaben Berlin (MEZ/MESZ).')
     st.download_button('⬇️ CSV exportieren',data=df.to_csv(index=False).encode('utf-8-sig'),file_name='lbrixx_preisvergleich.csv',mime='text/csv')
     # Row-specific one-click refresh: only this product and only its linked shops.
     row_refresh_param=st.query_params.get('price_row','')
@@ -1454,10 +1454,6 @@ else:
             for detail in report['details']:
                 st.write(detail)
     active=df.loc[~deleted_mask & ~hidden_mask]
-    selectable={f"{r.sku or r.odoo_id} · {str(r.description)[:65]}":int(i) for i,r in active.iterrows()}
-    chosen=st.selectbox('Einzelnen Artikel aktualisieren',options=['Bitte Artikel wählen']+list(selectable.keys()))
-    provider=st.selectbox('Anbieter für Einzelaktualisierung',options=['Brickmo','Lootstore','Lumibricks','Brickmo und Lootstore','Alle drei'])
-    one_update=st.button('🔄 Gewählten Artikel aktualisieren')
     with st.expander('📋 Lumibricks – alle Preise testen und gesammelt freigeben', expanded=False):
         st.caption('Prüft alle aktiven, verknüpften Lumibricks-Artikel mit DE-Lieferland im Browser. '
                    'Die Europreise sind aus USD berechnet, keine direkt bestätigten Shoppreise. '
@@ -1539,67 +1535,7 @@ else:
             st.write(f'**Letzte Vorschau:** {batch["created_at"].astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")} '
                      f'· Status: {state} · Faktor: {batch["factor"]} · '
                      f'{len(valid)} lieferbar · {len(unavailable)} nicht lieferbar (mit Preis) · {len(bad)} Fehler')
-            # Recheck exactly one linked product without restarting the entire
-            # bulk run. Persist the replacement in this same PostgreSQL preview.
-            if state in ('ready','interrupted') and entries:
-                st.markdown('##### 🔎 Einzelnen Artikel in der bestehenden Vorschau nachprüfen')
-                st.caption('Nur dieser Artikel wird neu abgefragt. Alle übrigen Vorschauwerte bleiben erhalten. '
-                           'Es wird kein Preis in die Preishistorie übernommen.')
-                preview_options={f"{e.get('sku','')} · {str(e.get('title',''))[:65]}":str(e.get('product_id'))
-                                 for e in entries if str(e.get('product_id','')).isdigit()}
-                single_key=st.selectbox('Artikel für Nachprüfung',
-                                        options=['Bitte Artikel wählen']+list(preview_options.keys()),
-                                        key='lumi_bulk_single_selector')
-                if st.button('🔄 Nur ausgewählten Artikel erneut prüfen',
-                             key='lumi_bulk_single_refresh',disabled=single_key=='Bitte Artikel wählen'):
-                    selected_id=preview_options[single_key]
-                    old=next(e for e in entries if str(e.get('product_id'))==selected_id)
-                    current=next((r for r in bulk_rows if str(r.db_id)==selected_id),None)
-                    if current is None:
-                        st.error('Dieser Artikel ist nicht mehr aktiv oder hat keinen Lumibricks-Produktlink. '
-                                 'Die gespeicherte Vorschau wurde nicht verändert.')
-                    else:
-                        row_entry={'product_id':selected_id,'sku':str(current.sku),
-                                   'title':str(current.description)[:180],
-                                   'url':lumibricks_store.canonical(str(current.lumibricks_url)),
-                                   'factor':str(batch['factor'])}
-                        with st.spinner(f"Prüfe ausschließlich {current.sku} ..."):
-                            try:
-                                result=lumibricks_store.preview_de_market_usd_to_eur(
-                                    str(current.lumibricks_url),factor=str(batch['factor']))
-                                row_entry.update(variant_sku=str(result.get('sku') or ''),
-                                                 variant_id=str(result.get('variant_id') or ''),
-                                                 available=result.get('available'),
-                                                 regular_usd=str(result.get('regular_usd') or ''),
-                                                 sale_usd=str(result.get('sale_usd') or ''),
-                                                 promotion_evidence=str(result.get('promotion_evidence') or ''))
-                                if not str(result['sku']).upper().endswith('#DE'):
-                                    raise ValueError('DE-Variante nicht bestätigt')
-                                if result.get('available') is True and result.get('price_review'):
-                                    raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
-                                is_available=result.get('available') is True
-                                row_entry.update(status='ok' if is_available else 'unavailable',
-                                                 usd=str(result['usd']),eur=str(result['eur_estimate']),
-                                                 variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
-                                                 preview_revision=5,available=is_available,
-                                                 before_usd=str(result['before_usd']),
-                                                 note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence'))
-                                                       if is_available and result.get('promotion_evidence')
-                                                       else 'Nicht lieferbar – Shopify-Variantenpreis zur Information, kein kaufbares Angebot'
-                                                       if not is_available else 'EUR aus USD berechnet'))
-                            except Exception as exc:
-                                row_entry.update(status='error',error=str(exc)[:450])
-                            try:
-                                lumibricks_store.replace_single_bulk_preview_entry(
-                                    DB_URL,str(batch['id']),selected_id,row_entry)
-                                st.success(f"{row_entry['sku']}: Einzelprüfung abgeschlossen – "
-                                           +('Preis berechnet' if row_entry['status']=='ok'
-                                             else 'Nicht lieferbar (Preis sichtbar)' if row_entry['status']=='unavailable'
-                                             else 'Fehler: '+row_entry.get('error',''))
-                                           + '. Alle anderen Vorschauzeilen sind unverändert.')
-                                st.rerun()
-                            except Exception as exc:
-                                st.error('Nachprüfung konnte nicht in der Vorschau gespeichert werden: '+str(exc))
+            st.caption('Einzelne Artikel über 🔄 in der jeweiligen Artikelzeile neu prüfen; die übrige Vorschau bleibt erhalten.')
             view_rows=[]
             for e in entries:
                 view_rows.append({'Artikel':e.get('sku',''),'Bezeichnung':e.get('title',''),
@@ -1646,6 +1582,9 @@ else:
         st.caption('Wählt eine eindeutig nachgewiesene DE-Variante statt des Standardartikels. '
                    'Der Faktor 0,892 ist vorläufig. Ergebnisse sind Schätzungen, keine '
                    'bestätigten Shoppreise; PostgreSQL bleibt unverändert.')
+        diagnostic_choices={f'{r.sku or r.odoo_id} · {str(r.description)[:65]}':int(i) for i,r in active.iterrows() if lumibricks_store.valid_url(str(r.lumibricks_url).strip())}
+        chosen=st.selectbox('Artikel für erweiterte Lumibricks-Diagnose',options=['Bitte Artikel wählen']+list(diagnostic_choices),key='lumi_advanced_diagnostic_article')
+        selectable=diagnostic_choices
         current_lumi_url = ''
         if chosen != 'Bitte Artikel wählen':
             current_lumi_url = str(df.loc[selectable[chosen]].lumibricks_url).strip()
@@ -1657,7 +1596,7 @@ else:
                  'den vollständigen Link mit ?variant=... einfügen. Keine Speicherung des Links.')
         if st.button('🧪 Variantenpreis und EUR-Schätzung prüfen', key='lumi_usd_preview'):
             if chosen == 'Bitte Artikel wählen':
-                st.warning('Bitte zuerst einen Artikel bei „Einzelnen Artikel aktualisieren“ auswählen.')
+                st.warning('Bitte im Diagnosebereich zuerst einen Artikel auswählen.')
             elif not lumibricks_store.valid_url(preview_url_input.strip()):
                 st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
             else:
@@ -1831,8 +1770,46 @@ else:
                     product_id=str(r.db_id).strip()
                     if not product_id or not product_id.isdigit():
                         raise ValueError('Datenbank-ID des Artikels fehlt')
-                    saved_price=lumibricks_store.record(DB_URL,product_id,shop_url)
-                    report['details'].append(f'Lumibricks: {saved_price} EUR gespeichert')
+                    batch=lumibricks_store.latest_bulk_preview(DB_URL)
+                    if not batch or batch.get('state') not in ('ready','interrupted'):
+                        report['skipped']+=1
+                        report['details'].append('Lumibricks: Keine offene abgeschlossene Sammelvorschau. Zuerst einmalig eine Lumibricks-Gesamtvorschau starten.')
+                        continue
+                    entries=batch.get('entries') or []
+                    if sum(str(e.get('product_id'))==product_id for e in entries)!=1:
+                        report['skipped']+=1
+                        report['details'].append('Lumibricks: Artikel fehlt in der bestehenden Vorschau; keine automatische Übernahme.')
+                        continue
+                    entry={'product_id':product_id,'sku':str(r.sku),'title':str(r.description)[:180],
+                           'url':lumibricks_store.canonical(shop_url),'factor':str(batch['factor'])}
+                    try:
+                        result=lumibricks_store.preview_de_market_usd_to_eur(shop_url,factor=str(batch['factor']))
+                        entry.update(variant_sku=str(result.get('sku') or ''),variant_id=str(result.get('variant_id') or ''),
+                                     available=result.get('available'),regular_usd=str(result.get('regular_usd') or ''),
+                                     sale_usd=str(result.get('sale_usd') or ''),
+                                     promotion_evidence=str(result.get('promotion_evidence') or ''))
+                        if not str(result.get('sku') or '').upper().endswith('#DE'):
+                            raise ValueError('DE-Variante nicht bestätigt')
+                        if result.get('available') is True and result.get('price_review'):
+                            raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
+                        available=result.get('available') is True
+                        entry.update(status='ok' if available else 'unavailable',
+                                     usd=str(result['usd']),eur=str(result['eur_estimate']),
+                                     preview_revision=5,before_usd=str(result.get('before_usd') or ''),
+                                     note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence'))
+                                           if available and result.get('promotion_evidence')
+                                           else 'Nicht lieferbar – Variantenpreis nur zur Information' if not available
+                                           else 'EUR aus USD berechnet'))
+                    except Exception as err:
+                        entry.update(status='error',error=str(err)[:450])
+                    lumibricks_store.replace_single_bulk_preview_entry(DB_URL,str(batch['id']),product_id,entry)
+                    report['details'].append('Lumibricks: '+(
+                        'EUR-Vorschau '+str(entry['eur'])+' € erneuert (noch nicht freigegeben)'
+                        if entry['status'] in ('ok','unavailable') else
+                        'Vorschau aktualisiert, Prüfung fehlgeschlagen: '+entry.get('error','')))
+                    if entry['status']=='error':
+                        report['failed']+=1
+                        continue
                 else:
                     updated,ok,failed=update_prices(updated,shop,[row_refresh_index])
                     changed_indices.append(row_refresh_index)
@@ -1858,74 +1835,26 @@ else:
         st.session_state['last_row_price_run']=report
         st.rerun()
     if lumi_update:
-        lumi_active=df.loc[~deleted_mask & ~hidden_mask]
-        lumi_rows=[r for _,r in lumi_active.iterrows() if str(r.lumibricks_url).strip() and str(r.db_id).strip()]
-        if not lumi_rows:
-            st.info('Lumibricks: Keine aktiven Artikel mit hinterlegtem Produktlink.')
-        else:
-            st.write(f'Lumibricks: {len(lumi_rows)} Produktseiten werden geprüft.')
-            lumi_progress=st.progress(0)
-            lumi_ok=lumi_failed=0
-            lumi_details=[]
-            for pos,r in enumerate(lumi_rows):
-                try:
-                    saved_price=lumibricks_store.record(DB_URL,r.db_id,str(r.lumibricks_url))
-                    lumi_ok+=1
-                    lumi_details.append(f"{r.sku}: {saved_price} EUR gespeichert")
-                except Exception as exc:
-                    lumi_failed+=1
-                    lumi_details.append(f'FEHLER {r.sku}: {exc}')
-                    st.warning(f'Lumibricks {r.sku}: {exc}')
-                    if '429' in str(exc):
-                        st.warning('Lumibricks: HTTP 429 – Serie abgebrochen.')
-                        lumi_progress.progress((pos+1)/len(lumi_rows))
-                        break
-                lumi_progress.progress((pos+1)/len(lumi_rows))
-                if pos+1<len(lumi_rows): time.sleep(2)
-            st.session_state['last_lumi_price_run']={'ok':lumi_ok,'failed':lumi_failed,'total':len(lumi_rows),'details':lumi_details}
-            if lumi_ok: st.success(f'Lumibricks: {lumi_ok} Preise in PostgreSQL gespeichert.')
-            if lumi_failed: st.error(f'Lumibricks: {lumi_failed} Artikel nicht aktualisiert. Fehlermeldungen unten prüfen.')
-            with st.expander('Detailliertes Ergebnis der Preisprüfung',expanded=bool(lumi_failed)):
-                for line in lumi_details: st.text(line)
-            try:
-                st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
-                st.info('Neue Preise werden beim nächsten Neuladen der Artikelübersicht angezeigt.')
-            except Exception as exc:
-                st.warning(f'Preise gespeichert, aber Ansicht konnte nicht neu geladen werden: {exc}')
-    if brickmo_update or loot_update or one_update:
+        st.info('Lumibricks-Preise werden ausschließlich über die gespeicherte Sammelvorschau und die einmalige Sammelfreigabe aktualisiert. Bitte den Bereich „Lumibricks – alle Preise testen und gesammelt freigeben“ verwenden.')
+    if brickmo_update or loot_update:
         new=df.copy()
-        shops=['brickmo'] if brickmo_update else ['lootstore'] if loot_update else ['brickmo','lootstore','lumibricks'] if provider=='Alle drei' else ['brickmo','lootstore'] if provider=='Brickmo und Lootstore' else [provider.lower()]
-        if one_update and chosen=='Bitte Artikel wählen':
-            st.warning('Bitte zunächst einen Artikel auswählen.')
+        shop='brickmo' if brickmo_update else 'lootstore'
+        subset=list(active.index)
+        url_field='brickmo_url' if brickmo_update else 'lootstore_url'
+        indices=[i for i in subset if str(new.at[i,url_field]).strip()]
+        if not indices:
+            st.info(f'{shop}: Keine gültigen Produktlinks für die Auswahl.')
         else:
-            changed_indices=[]
-            for shop in shops:
-                url_field={'brickmo':'brickmo_url','lootstore':'lootstore_url','lumibricks':'lumibricks_url'}[shop]
-                subset=[selectable[chosen]] if one_update else list(active.index)
-                indices=[i for i in subset if str(new.at[i,url_field]).strip()]
-                if not indices:
-                    st.info(f'{shop}: Keine hinterlegten Links für die Auswahl.')
-                    continue
-                st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
-                if shop=='lumibricks':
-                    ok=failed=0
-                    for i in indices:
-                        try:
-                            lumibricks_store.record(DB_URL,new.at[i,'db_id'],str(new.at[i,'lumibricks_url']))
-                            ok+=1
-                        except Exception as exc:
-                            failed+=1
-                            st.warning(f'Lumibricks {new.at[i,"sku"]}: {exc}')
-                    # Lumibricks persists its own current prices and history in PostgreSQL.
-                else:
-                    new,ok,failed=update_prices(new,shop,indices)
-                    changed_indices.extend(indices)
-                st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
+            st.write(f'{shop.capitalize()}: {len(indices)} Produktseiten werden geprüft.')
+            new,ok,failed=update_prices(new,shop,indices)
+            st.write(f'{shop.capitalize()}: {ok} erfolgreich, {failed} fehlgeschlagen.')
             try:
-                if changed_indices: save_changed_rows(new,changed_indices)
+                save_changed_rows(new,indices)
                 st.session_state.products=normalize(lumibricks_store.overlay(DB_URL,db_store.load(DB_URL)))
-                st.success('Preisprüfung gespeichert.'); st.rerun()
-            except Exception as exc: st.error(f'Speichern fehlgeschlagen: {exc}')
+                st.success('Preisprüfung gespeichert.')
+                st.rerun()
+            except Exception as exc:
+                st.error(f'Speichern fehlgeschlagen: {exc}')
 
     st.caption('Zum Bearbeiten, Ausblenden oder Löschen bitte die Aktionen direkt am Anfang der jeweiligen Tabellenzeile verwenden.')
 

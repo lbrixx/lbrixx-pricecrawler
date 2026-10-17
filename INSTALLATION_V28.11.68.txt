@@ -1,0 +1,7 @@
+V28.11.68 – Oberfläche bereinigt
+
+app.py und lumibricks_store.py in GitHub ersetzen.
+Entfernt: separate Einzelartikelwahl und Einzel-Nachprüfung in der Sammelvorschau.
+Einzelaktualisierung über Tabellenzeilen-🔄: Brickmo/Lootstore regulär; Lumibricks nur in bereits bestehender, nicht freigegebener Sammelvorschau.
+Erweiterte Lumibricks-Diagnose im eingeklappten Diagnosebereich mit eigener Artikelauswahl.
+Keine Datenbankmigration.
