@@ -1493,17 +1493,20 @@ else:
                                      promotion_evidence=str(result.get('promotion_evidence') or ''))
                         if not str(result['sku']).upper().endswith('#DE'):
                             raise ValueError('DE-Variante nicht bestätigt')
-                        if not result.get('available',False):
-                            raise ValueError('DE-Variante nicht lieferbar / ausverkauft')
-                        if result.get('price_review'):
+                        if result.get('available') is True and result.get('price_review'):
                             raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
                         # Equal before/after prices are valid: some products cost the same in both markets.
                         # Localization HTTP success and the confirmed #DE variant are checked in the scraper.
-                        entry.update(status='ok',usd=str(result['usd']),eur=str(result['eur_estimate']),
+                        is_available=result.get('available') is True
+                        entry.update(status='ok' if is_available else 'unavailable',
+                                     usd=str(result['usd']),eur=str(result['eur_estimate']),
                                      variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
-                                     preview_revision=4,available=True,sale_usd=str(result.get('sale_usd') or ''),
+                                     preview_revision=5,available=is_available,sale_usd=str(result.get('sale_usd') or ''),
                                      regular_usd=str(result.get('regular_usd') or ''),
-                                     before_usd=str(result['before_usd']),note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence')) if result.get('promotion_evidence') else 'EUR aus USD berechnet'))
+                                     before_usd=str(result['before_usd']),
+                                     note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence')) if is_available and result.get('promotion_evidence')
+                                           else 'Nicht lieferbar – Shopify-Variantenpreis zur Information, kein kaufbares Angebot' if not is_available
+                                           else 'EUR aus USD berechnet'))
                     except Exception as exc:
                         entry.update(status='error',error=str(exc)[:450],note=str(entry.get('note') or ''))
                         if '429' in str(exc): interrupted=True
@@ -1517,8 +1520,9 @@ else:
                 if not interrupted:
                     lumibricks_store.save_bulk_preview(DB_URL,bid,entries,state='ready')
                 status.empty()
-                st.success(f'Vorschau gespeichert: {sum(e["status"]=="ok" for e in entries)} Preise ermittelt, '
-                           f'{sum(e["status"]!="ok" for e in entries)} Fehler. Keine Preise übernommen.')
+                st.success(f'Vorschau gespeichert: {sum(e["status"]=="ok" for e in entries)} lieferbare Preise, '
+                           f'{sum(e["status"]=="unavailable" for e in entries)} nicht lieferbare Artikel mit Preis, '
+                           f'{sum(e["status"]=="error" for e in entries)} Fehler. Keine Preise übernommen.')
             except Exception as exc:
                 st.error('Testlauf konnte nicht abgeschlossen werden: '+str(exc))
         try:
@@ -1529,17 +1533,79 @@ else:
         if batch:
             entries=batch.get('entries') or []
             valid=[e for e in entries if e.get('status')=='ok']
-            bad=[e for e in entries if e.get('status')!='ok']
+            unavailable=[e for e in entries if e.get('status')=='unavailable']
+            bad=[e for e in entries if e.get('status')=='error']
             state=batch['state']
             st.write(f'**Letzte Vorschau:** {batch["created_at"].astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")} '
                      f'· Status: {state} · Faktor: {batch["factor"]} · '
-                     f'{len(valid)} gültige Preise · {len(bad)} Fehler')
+                     f'{len(valid)} lieferbar · {len(unavailable)} nicht lieferbar (mit Preis) · {len(bad)} Fehler')
+            # Recheck exactly one linked product without restarting the entire
+            # bulk run. Persist the replacement in this same PostgreSQL preview.
+            if state in ('ready','interrupted') and entries:
+                st.markdown('##### 🔎 Einzelnen Artikel in der bestehenden Vorschau nachprüfen')
+                st.caption('Nur dieser Artikel wird neu abgefragt. Alle übrigen Vorschauwerte bleiben erhalten. '
+                           'Es wird kein Preis in die Preishistorie übernommen.')
+                preview_options={f"{e.get('sku','')} · {str(e.get('title',''))[:65]}":str(e.get('product_id'))
+                                 for e in entries if str(e.get('product_id','')).isdigit()}
+                single_key=st.selectbox('Artikel für Nachprüfung',
+                                        options=['Bitte Artikel wählen']+list(preview_options.keys()),
+                                        key='lumi_bulk_single_selector')
+                if st.button('🔄 Nur ausgewählten Artikel erneut prüfen',
+                             key='lumi_bulk_single_refresh',disabled=single_key=='Bitte Artikel wählen'):
+                    selected_id=preview_options[single_key]
+                    old=next(e for e in entries if str(e.get('product_id'))==selected_id)
+                    current=next((r for r in bulk_rows if str(r.db_id)==selected_id),None)
+                    if current is None:
+                        st.error('Dieser Artikel ist nicht mehr aktiv oder hat keinen Lumibricks-Produktlink. '
+                                 'Die gespeicherte Vorschau wurde nicht verändert.')
+                    else:
+                        row_entry={'product_id':selected_id,'sku':str(current.sku),
+                                   'title':str(current.description)[:180],
+                                   'url':lumibricks_store.canonical(str(current.lumibricks_url)),
+                                   'factor':str(batch['factor'])}
+                        with st.spinner(f"Prüfe ausschließlich {current.sku} ..."):
+                            try:
+                                result=lumibricks_store.preview_de_market_usd_to_eur(
+                                    str(current.lumibricks_url),factor=str(batch['factor']))
+                                row_entry.update(variant_sku=str(result.get('sku') or ''),
+                                                 variant_id=str(result.get('variant_id') or ''),
+                                                 available=result.get('available'),
+                                                 regular_usd=str(result.get('regular_usd') or ''),
+                                                 sale_usd=str(result.get('sale_usd') or ''),
+                                                 promotion_evidence=str(result.get('promotion_evidence') or ''))
+                                if not str(result['sku']).upper().endswith('#DE'):
+                                    raise ValueError('DE-Variante nicht bestätigt')
+                                if result.get('available') is True and result.get('price_review'):
+                                    raise ValueError('Aktionspreis nicht eindeutig: '+str(result['price_review']))
+                                is_available=result.get('available') is True
+                                row_entry.update(status='ok' if is_available else 'unavailable',
+                                                 usd=str(result['usd']),eur=str(result['eur_estimate']),
+                                                 variant_sku=str(result['sku']),variant_id=str(result['variant_id']),
+                                                 preview_revision=5,available=is_available,
+                                                 before_usd=str(result['before_usd']),
+                                                 note=('EUR aus USD berechnet; '+str(result.get('promotion_evidence'))
+                                                       if is_available and result.get('promotion_evidence')
+                                                       else 'Nicht lieferbar – Shopify-Variantenpreis zur Information, kein kaufbares Angebot'
+                                                       if not is_available else 'EUR aus USD berechnet'))
+                            except Exception as exc:
+                                row_entry.update(status='error',error=str(exc)[:450])
+                            try:
+                                lumibricks_store.replace_single_bulk_preview_entry(
+                                    DB_URL,str(batch['id']),selected_id,row_entry)
+                                st.success(f"{row_entry['sku']}: Einzelprüfung abgeschlossen – "
+                                           +('Preis berechnet' if row_entry['status']=='ok'
+                                             else 'Nicht lieferbar (Preis sichtbar)' if row_entry['status']=='unavailable'
+                                             else 'Fehler: '+row_entry.get('error',''))
+                                           + '. Alle anderen Vorschauzeilen sind unverändert.')
+                                st.rerun()
+                            except Exception as exc:
+                                st.error('Nachprüfung konnte nicht in der Vorschau gespeichert werden: '+str(exc))
             view_rows=[]
             for e in entries:
                 view_rows.append({'Artikel':e.get('sku',''),'Bezeichnung':e.get('title',''),
                                   'DE-SKU':e.get('variant_sku',''),'Varianten-ID':e.get('variant_id',''),
                                   'USD DE-Markt':e.get('usd',''),'EUR berechnet':e.get('eur',''),
-                                  'Faktor':e.get('factor',''), 'Regulär USD':e.get('regular_usd',''), 'Aktion USD':e.get('sale_usd',''), 'Verfügbar':e.get('available',''), 'Aktionsnachweis':e.get('promotion_evidence',''), 'Status':'Berechnet' if e.get('status')=='ok' else 'Fehler',
+                                  'Faktor':e.get('factor',''), 'Regulär USD':e.get('regular_usd',''), 'Aktion USD':e.get('sale_usd',''), 'Verfügbar':e.get('available',''), 'Aktionsnachweis':e.get('promotion_evidence',''), 'Status':('Berechnet' if e.get('status')=='ok' else 'Nicht lieferbar' if e.get('status')=='unavailable' else 'Fehler'),
                                   'Hinweis':e.get('error') or e.get('note','')})
             if view_rows:
                 table=pd.DataFrame(view_rows)
@@ -1553,15 +1619,17 @@ else:
                 st.info('Ein Testlauf ist noch in Bearbeitung oder wurde vorzeitig unterbrochen. Keine Freigabe möglich.')
             elif state=='approved':
                 st.success('Diese Vorschau wurde bereits gesammelt freigegeben. Eine erneute Übernahme ist gesperrt.')
-            elif state=='ready' and valid and not all(e.get('preview_revision')==4 for e in valid):
+            elif state=='ready' and (valid or unavailable) and not all(e.get('preview_revision')==5 for e in valid+unavailable):
                 st.warning('Diese Vorschau wurde vor der Aktionspreis-/Verfügbarkeitsprüfung erstellt. Bitte einen neuen vollständigen Testlauf starten; alte Vorschau kann nicht freigegeben werden.')
-            elif state=='ready' and valid:
-                st.warning(f'Freigabe würde **{len(valid)} berechnete EUR-Preise** in current_prices übernehmen '
-                           'und Änderungen in price_history dokumentieren. '
-                           f'{len(bad)} fehlgeschlagene Artikel werden ausgeschlossen. '                           'Die angezeigten EUR-Beträge sind Näherungen und keine verifizierten EUR-Shoppreise.')
+            elif state=='ready' and (valid or unavailable):
+                st.warning(f'Freigabe würde **{len(valid)} lieferbare und {len(unavailable)} nicht lieferbare Preise** '
+                           'in current_prices übernehmen und Preis-/Verfügbarkeitsänderungen in price_history dokumentieren. '
+                           'Nicht lieferbare Preise bleiben in der Artikelübersicht sichtbar, zählen aber NICHT als kaufbarer günstigster Preis. '
+                           f'{len(bad)} fehlgeschlagene Artikel werden ausgeschlossen. '
+                           'Die EUR-Beträge sind aus USD berechnete Näherungen, keine direkt bestätigten EUR-Shoppreise.')
                 agree=st.checkbox('Ich habe die Vorschau geprüft und möchte alle erfolgreich berechneten Preise gesammelt speichern.',
                                   key='lumi_bulk_approval_checkbox')
-                if st.button(f'✅ {len(valid)} Preise einmalig gesammelt freigeben',
+                if st.button(f'✅ {len(valid)+len(unavailable)} Preise einmalig gesammelt freigeben',
                              key='lumi_bulk_approve',disabled=not agree,type='primary'):
                     try:
                         outcome=lumibricks_store.approve_bulk_preview(DB_URL,str(batch['id']))

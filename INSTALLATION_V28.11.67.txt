@@ -1,0 +1,4 @@
+V28.11.67: Einzelne Artikel in vorhandener PostgreSQL-Sammelvorschau neu prüfen.
+Dateien app.py und lumibricks_store.py ersetzen.
+Einzelne Nachprüfung aktualisiert nur eine Vorschauzeile, nicht die Preise.
+Bei freigegebenen Vorschauen ist Einzel-Nachprüfung gesperrt.
