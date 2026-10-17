@@ -1,0 +1,1 @@
+V28.11.69: Entfernt veralteten Lumibricks-Varianten-/USD-EUR-Test und den direkten, irreführenden Standardmarkt-Preisabruf aus der Oberfläche. Neue DE-Markt- und technische Diagnosen bleiben im zugeklappten Bereich Erweiterte Lumibricks-Diagnose. Installation: app.py und lumibricks_store.py ersetzen. Bestehende Daten bleiben unverändert.

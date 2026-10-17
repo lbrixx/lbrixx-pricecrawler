@@ -1578,44 +1578,22 @@ else:
                     except Exception as exc:
                         st.error('Sammelfreigabe abgebrochen (keine Teilübernahme): '+str(exc))
 
-    with st.expander('🧪 Lumibricks Varianten-/USD→EUR-Test (ohne Speicherung)', expanded=False):
-        st.caption('Wählt eine eindeutig nachgewiesene DE-Variante statt des Standardartikels. '
-                   'Der Faktor 0,892 ist vorläufig. Ergebnisse sind Schätzungen, keine '
-                   'bestätigten Shoppreise; PostgreSQL bleibt unverändert.')
+    with st.expander('🔬 Erweiterte Lumibricks-Diagnose', expanded=False):
+        st.caption('Nur technische Diagnose: Alle Preisprüfungen mit Deutschland-Markt. '
+                   'Keine direkte Speicherung in der Preishistorie. '
+                   'Für reguläre Preisprüfungen bitte das 🔄-Symbol der Artikelzeile verwenden.')
         diagnostic_choices={f'{r.sku or r.odoo_id} · {str(r.description)[:65]}':int(i) for i,r in active.iterrows() if lumibricks_store.valid_url(str(r.lumibricks_url).strip())}
-        chosen=st.selectbox('Artikel für erweiterte Lumibricks-Diagnose',options=['Bitte Artikel wählen']+list(diagnostic_choices),key='lumi_advanced_diagnostic_article')
-        selectable=diagnostic_choices
+        chosen=st.selectbox('Artikel für erweiterte Lumibricks-Diagnose',
+                            options=['Bitte Artikel wählen']+list(diagnostic_choices),
+                            key='lumi_advanced_diagnostic_article')
         current_lumi_url = ''
         if chosen != 'Bitte Artikel wählen':
-            current_lumi_url = str(df.loc[selectable[chosen]].lumibricks_url).strip()
+            current_lumi_url = str(df.loc[diagnostic_choices[chosen]].lumibricks_url).strip()
         preview_url_input = st.text_input(
             'Lumibricks-Produktlink (optional mit ?variant=ID)',
             value=current_lumi_url,
             key=f'lumi_variant_preview_url_{chosen}',
-            help='Wenn der gespeicherte Link keine Varianten-ID enthält, kannst du hier '
-                 'den vollständigen Link mit ?variant=... einfügen. Keine Speicherung des Links.')
-        if st.button('🧪 Variantenpreis und EUR-Schätzung prüfen', key='lumi_usd_preview'):
-            if chosen == 'Bitte Artikel wählen':
-                st.warning('Bitte im Diagnosebereich zuerst einen Artikel auswählen.')
-            elif not lumibricks_store.valid_url(preview_url_input.strip()):
-                st.warning('Bitte einen gültigen Lumibricks-Produktlink angeben.')
-            else:
-                try:
-                    estimate = lumibricks_store.preview_usd_to_eur(preview_url_input.strip())
-                    st.warning(f"NUR TEST / NICHT GESPEICHERT – "
-                               f"{df.loc[selectable[chosen]].sku}: "
-                               f"{estimate['usd']} USD × {estimate['factor']} "
-                               f"→ ungefähr {estimate['eur_estimate']} EUR")
-                    st.write(f"Shopify-SKU: {estimate['sku']} · Varianten-ID: "
-                             f"{estimate['variant_id']} · "
-                             f"Varianten im Produkt: {estimate['variant_count']}")
-                    st.write(f"Auswahl: {estimate['selection_reason']}")
-                    if estimate['requested_variant_id']:
-                        st.caption(f"URL-Variante: {estimate['requested_variant_id']}")
-                    st.caption('Shopify-Währung USD bestätigt. EUR ist ein errechneter '
-                               'Vergleichswert, nicht direkt von Lumibricks bestätigt.')
-                except Exception as exc:
-                    st.error(f'Lumibricks-Variantentest fehlgeschlagen: {exc}')
+            help='Nur für Diagnose; ändert nicht die gespeicherte Zuordnung.')
 
         st.divider()
         st.markdown('**🌍 DE-Markt-Variantenpreis testen (ohne Speicherung)**')
