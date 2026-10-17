@@ -1,0 +1,14 @@
+LBrixx Price-Crawler V28.11.57 – Shopify-Varianten-Test
+
+1. app.py und lumibricks_store.py auf GitHub ersetzen.
+2. Bereits bestehende requirements.txt / packages.txt unverändert lassen;
+   Playwright/Chromium werden weiterhin nur für den bisherigen EUR-Browserabruf benötigt.
+3. Streamlit neu starten.
+4. Unter Einzelnen Artikel aktualisieren einen Artikel wählen.
+5. Expander "Lumibricks Varianten-/USD→EUR-Test" öffnen.
+6. Optional vollständigen Produktlink mit ?variant=ID ins Testfeld eintragen.
+7. "Variantenpreis und EUR-Schätzung prüfen" klicken.
+
+AUSDRÜCKLICH NUR TEST: USD-Faktor 0,892 ist vorläufig. Keine Änderungen
+an aktuellen Preisen, Historie, Zuordnungen oder Datenbankschema.
+Nicht eindeutig nachgewiesene DE-Variante wird abgelehnt.

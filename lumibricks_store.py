@@ -1,6 +1,6 @@
 """Lumibricks offer storage and cautious EUR price extraction."""
 import re, json, time
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote, parse_qs
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import requests
@@ -514,15 +514,58 @@ def search_exact_sku(sku, session=None):
     return None, f'Keine bestätigte SKU; {len(handles[:12])} Produktseiten geprüft (Shop-Suche: {response.status_code})'
 
 
-# V28.11.56: Nur Vorschau – keine Persistierung und kein bestätigter EUR-Preis.
+# V28.11.57: Preis-Vorschau pro konkreter Shopify-Variante; keine Persistierung.
 PREVIEW_USD_TO_EUR = Decimal('0.892')
 
-def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
-    """Shopify-USD-Preis der passenden Variante als EUR-SCHÄTZUNG anzeigen.
 
-    Schreibt weder in current_prices noch in price_history. Der Faktor ist
-    ein beobachteter Testfaktor, kein verifizierter Wechselkurs des Shops.
+def _preview_variant(variants, product_url):
+    """Select a demonstrably German variant, respecting an explicit URL ID.
+
+    Never silently choose the first/default/non-DE variant when several exist.
+    Returns (variant, selection_evidence, query_variant_id).
     """
+    params = parse_qs(urlparse(product_url).query)
+    ids = [str(value).strip() for value in params.get('variant', []) if str(value).strip()]
+    if len(set(ids)) > 1:
+        raise ValueError('Mehrere unterschiedliche Varianten-IDs in der URL')
+    requested_id = ids[0] if ids else ''
+    explicitly_selected = None
+    if requested_id:
+        matches = [v for v in variants if str(v.get('id') or '') == requested_id]
+        if len(matches) != 1:
+            raise ValueError(f'URL-Variante {requested_id} nicht im Shopify-Produkt gefunden')
+        explicitly_selected = matches[0]
+
+    german = [v for v in variants if str(v.get('sku') or '').strip().upper().endswith('#DE')]
+    if len(german) > 1:
+        if explicitly_selected is not None and any(
+            str(v.get('id')) == str(explicitly_selected.get('id')) for v in german
+        ):
+            return explicitly_selected, 'URL-Variante ist eine bestätigte DE-Variante', requested_id
+        raise ValueError('Mehrere DE-Varianten: Bitte den vollständigen Produktlink mit ?variant=ID eingeben')
+    if len(german) == 1:
+        selected = german[0]
+        if explicitly_selected is not None and str(explicitly_selected.get('id')) != str(selected.get('id')):
+            # Do not quietly misrepresent the requested variant; show a useful warning.
+            raise ValueError('Die URL-Variante ist nicht die einzige #DE-Variante: '
+                             f'URL-ID {requested_id}, DE-ID {selected.get("id")}. '
+                             'Bitte die Auswahl im Shop prüfen.')
+        return selected, ('URL-ID und #DE-SKU stimmen überein' if requested_id
+                          else 'Eindeutige #DE-SKU im Shopify-Produkt'), requested_id
+    if len(variants) == 1:
+        selected = variants[0]
+        if requested_id and str(selected.get('id')) != requested_id:
+            raise ValueError('URL-Variante stimmt nicht mit der einzigen Produktvariante überein')
+        return selected, 'Nur eine Shopify-Variante; DE-Lieferregion NICHT verifiziert', requested_id
+    if explicitly_selected is not None:
+        raise ValueError(f'URL-Variante {requested_id} gefunden, aber nicht als #DE bestätigt. '
+                         'DE-Versandvariante kann nicht sicher bestimmt werden.')
+    raise ValueError('Keine eindeutige #DE-Variante gefunden. '
+                     'Bitte URL mit ?variant=ID angeben; ohne DE-Nachweis kein Preis.')
+
+
+def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
+    """Preview a specifically selected Shopify USD variant; never save estimates."""
     clean = canonical(product_url)
     slug = urlparse(clean).path.rstrip('/').split('/')[-1]
     session = requests.Session()
@@ -531,22 +574,19 @@ def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
     if currency != 'USD':
         raise ValueError(f'USD-Test abgebrochen: Shopify-Warenkorb meldet {currency}, nicht USD')
     response = session.get(BASE + '/de/products/' + quote(slug, safe='') + '.js',
-                           timeout=25, headers={'Accept':'application/json','Cache-Control':'no-cache'})
+                           timeout=25, headers={'Accept': 'application/json',
+                                                'Cache-Control': 'no-cache'})
     if response.status_code == 429:
         raise RuntimeError('HTTP 429: Lumibricks begrenzt Anfragen')
     response.raise_for_status()
     try:
         product = response.json()
-    except (ValueError,TypeError) as exc:
+    except (ValueError, TypeError) as exc:
         raise ValueError('Produkt-JSON ungültig') from exc
     variants = product.get('variants') or []
-    german = [v for v in variants if str(v.get('sku','')).strip().upper().endswith('#DE')]
-    if len(german) == 1:
-        chosen = german[0]
-    elif len(german) == 0 and len(variants) == 1:
-        chosen = variants[0]
-    else:
-        raise ValueError('DE-Variante nicht eindeutig; Testpreis nicht berechnet')
+    if not variants:
+        raise ValueError('Shopify-Produkt enthält keine Varianten')
+    chosen, reason, requested_id = _preview_variant(variants, product_url)
     raw = chosen.get('price')
     if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
         raise ValueError('Shopify-Variantenpreis fehlt oder hat kein erwartetes Cent-Format')
@@ -557,6 +597,10 @@ def preview_usd_to_eur(product_url, factor=PREVIEW_USD_TO_EUR):
     if not Decimal('0') < factor < Decimal('2'):
         raise ValueError('Ungültiger Umrechnungsfaktor')
     eur_estimate = (usd * factor).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-    return {'usd': usd, 'eur_estimate': eur_estimate, 'factor': factor,
-            'sku': str(chosen.get('sku') or ''), 'url': clean,
-            'currency': currency, 'status': 'NICHT VERIFIZIERTE SCHÄTZUNG'}
+    return {
+        'usd': usd, 'eur_estimate': eur_estimate, 'factor': factor,
+        'sku': str(chosen.get('sku') or ''), 'variant_id': str(chosen.get('id') or ''),
+        'requested_variant_id': requested_id, 'selection_reason': reason,
+        'variant_count': len(variants), 'url': clean, 'currency': currency,
+        'status': 'NICHT VERIFIZIERTE SCHÄTZUNG',
+    }
